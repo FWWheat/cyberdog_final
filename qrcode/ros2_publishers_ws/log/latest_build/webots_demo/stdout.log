@@ -1,0 +1,35 @@
+running egg_info
+creating ../../build/webots_demo/webots_demo.egg-info
+writing ../../build/webots_demo/webots_demo.egg-info/PKG-INFO
+writing dependency_links to ../../build/webots_demo/webots_demo.egg-info/dependency_links.txt
+writing entry points to ../../build/webots_demo/webots_demo.egg-info/entry_points.txt
+writing requirements to ../../build/webots_demo/webots_demo.egg-info/requires.txt
+writing top-level names to ../../build/webots_demo/webots_demo.egg-info/top_level.txt
+writing manifest file '../../build/webots_demo/webots_demo.egg-info/SOURCES.txt'
+reading manifest file '../../build/webots_demo/webots_demo.egg-info/SOURCES.txt'
+writing manifest file '../../build/webots_demo/webots_demo.egg-info/SOURCES.txt'
+running build
+running build_py
+creating /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/build/webots_demo/build
+creating /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/build/webots_demo/build/lib
+creating /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/build/webots_demo/build/lib/webots_demo
+copying webots_demo/__init__.py -> /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/build/webots_demo/build/lib/webots_demo
+copying webots_demo/identify_qr_code.py -> /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/build/webots_demo/build/lib/webots_demo
+running install
+running install_lib
+creating /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/install/webots_demo/lib/python3.10/site-packages/webots_demo
+copying /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/build/webots_demo/build/lib/webots_demo/__init__.py -> /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/install/webots_demo/lib/python3.10/site-packages/webots_demo
+copying /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/build/webots_demo/build/lib/webots_demo/identify_qr_code.py -> /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/install/webots_demo/lib/python3.10/site-packages/webots_demo
+byte-compiling /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/install/webots_demo/lib/python3.10/site-packages/webots_demo/__init__.py to __init__.cpython-310.pyc
+byte-compiling /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/install/webots_demo/lib/python3.10/site-packages/webots_demo/identify_qr_code.py to identify_qr_code.cpython-310.pyc
+running install_data
+copying package.xml -> /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/install/webots_demo/share/webots_demo
+creating /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/install/webots_demo/share/ament_index
+creating /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/install/webots_demo/share/ament_index/resource_index
+creating /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/install/webots_demo/share/ament_index/resource_index/packages
+copying resource/webots_demo -> /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/install/webots_demo/share/ament_index/resource_index/packages
+running install_egg_info
+Copying ../../build/webots_demo/webots_demo.egg-info to /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/install/webots_demo/lib/python3.10/site-packages/webots_demo-0.0.0-py3.10.egg-info
+running install_scripts
+Installing identify_qr_code script to /home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/install/webots_demo/lib/webots_demo
+writing list of installed files to '/home/dsh/Documents/work_logs/1_3二维码定位/ros2_publishers_ws/build/webots_demo/install.log'

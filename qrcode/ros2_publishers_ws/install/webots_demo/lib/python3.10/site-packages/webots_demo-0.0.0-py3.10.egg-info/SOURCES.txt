@@ -1,0 +1,13 @@
+package.xml
+setup.cfg
+setup.py
+../../build/webots_demo/webots_demo.egg-info/PKG-INFO
+../../build/webots_demo/webots_demo.egg-info/SOURCES.txt
+../../build/webots_demo/webots_demo.egg-info/dependency_links.txt
+../../build/webots_demo/webots_demo.egg-info/entry_points.txt
+../../build/webots_demo/webots_demo.egg-info/requires.txt
+../../build/webots_demo/webots_demo.egg-info/top_level.txt
+../../build/webots_demo/webots_demo.egg-info/zip-safe
+resource/webots_demo
+webots_demo/__init__.py
+webots_demo/identify_qr_code.py

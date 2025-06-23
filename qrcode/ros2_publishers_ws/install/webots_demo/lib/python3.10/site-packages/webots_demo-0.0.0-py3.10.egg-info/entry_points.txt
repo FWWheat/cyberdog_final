@@ -1,0 +1,3 @@
+[console_scripts]
+identify_qr_code = webots_demo.identify_qr_code:main
+
