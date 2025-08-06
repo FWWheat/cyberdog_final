@@ -28,10 +28,10 @@
        ros2 topic pub -1 /state_machine/start_command std_msgs/msg/String "data: 'START'"
 
     2. 停止任务：
-       ros2 topic pub /state_machine/start_command std_msgs/msg/String "data: 'STOP'"
+       ros2 topic pub -1 /state_machine/start_command std_msgs/msg/String "data: 'STOP'"
 
     3. 重置状态机：
-       ros2 topic pub /state_machine/start_command std_msgs/msg/String "data: 'RESET'"
+       ros2 topic pub -1 /state_machine/start_command std_msgs/msg/String "data: 'RESET'"
 
     4. 监控状态：
        ros2 topic echo /state_machine/state_info
