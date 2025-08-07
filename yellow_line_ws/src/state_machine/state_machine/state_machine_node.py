@@ -41,7 +41,7 @@
 
 
 状态流程：
-    start -> start_to_qra -> in_qr_a -> qra_to_a1/qra_to_a2 -> in_a1/in_a2 -> end
+    start -> start_to_qra -> in_qr_a -> qra_to_a1/qra_to_a2 -> in_a1/in_a2 -> a1_to_s1/a2_to_s1 -> end
 
 运动类型说明：
     1. forward:    向前运动 - 5Hz频率发送15次  vel_des=[0.5, 0.0, 0.0]
@@ -50,7 +50,9 @@
     4. left:       向左运动 - 5Hz频率发送10次  vel_des=[0.0, 0.3, 0.0]
     5. turn_right: 右转90度 - 5Hz频率发送9次   vel_des=[0.0, 0.0, -1.0]
     6. turn_left:  左转90度 - 5Hz频率发送9次   vel_des=[0.0, 0.0, 1.0]
-    7. stop:       停止运动 - 5Hz频率发送5次   vel_des=[0.0, 0.0, 0.0]
+    7. emergency_stop: 急停 - 服务调用  motion_id=0
+    8. stand:      站立 - 服务调用  motion_id=111
+    9. lie_down:   高阻尼趴下 - 服务调用  motion_id=101
 
 MotionServoCmd接口规范：
     - 接口名字: "motion_servo_cmd"
@@ -80,6 +82,13 @@ import time
 from enum import Enum
 # 导入ROS2消息类型
 from protocol.msg import MotionServoCmd
+# 导入服务类型
+from protocol.srv import MotionResultCmd
+# 导入图像消息类型
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
+# 导入黄线检测器
+from .yellow_line_detector import YellowLineDetector
 
 class State(Enum):
     """状态机状态枚举 - 根据状态机超详细说明.md"""
@@ -90,8 +99,10 @@ class State(Enum):
     QRA_TO_A2 = 4        # 从二维码A点运动到A2点
     IN_A1 = 5            # 在A1点停止
     IN_A2 = 6            # 在A2点停止
-    END = 7              # 任务结束
-    ERROR = 8            # 错误状态
+    A1_TO_S1 = 7         # 从A1点运动到S1点
+    A2_TO_S1 = 8         # 从A2点运动到S1点
+    END = 9              # 任务结束
+    ERROR = 10           # 错误状态
 
 class StateMachineNode(Node):
     def __init__(self):
@@ -103,11 +114,19 @@ class StateMachineNode(Node):
 
         # 任务完成标志
         self.task_completed = False
-
+        
         # 二维码识别结果
         self.qr_result = None
         self.qr_detection_timeout = 10.0  # 二维码识别超时时间（秒）
         self.qr_detection_start_time = None
+        
+        # 图像处理相关
+        self.bridge = CvBridge()
+        self.yellow_line_detector = YellowLineDetector()
+        self.fisheye_image = None
+        self.rgb_image = None
+        self.position_check_pending = False
+        self.position_check_type = None  # 'fisheye' or 'rgb'
         
         # 运动控制参数
         self.movement_timeout = 30.0  # 运动超时时间（秒）
@@ -215,12 +234,10 @@ class StateMachineNode(Node):
                 'frequency': 5.0,
                 'count': 11
             },
-            # 运动类型7: 停止，0，频率5，次数5
-            'stop': {
-                'motion_id': 303,        # 机器人运控姿态
-                'cmd_type': 1,           # 指令类型: 1=Data, 2=End
+            # 运动类型7: 急停，使用服务调用
+            'emergency_stop': {
+                'motion_id': 0,          # 急停
                 'cmd_source': 4,         # 指令来源: 4=Algo
-                'value': 0,              # 0=内八步态, 2=垂直步态
                 'vel_des': [0.0, 0.0, 0.0],  # [x, y(≤1.5), yaw(≤2.0)] m/s
                 'rpy_des': [0.0, 0.0, 0.0],  # 当前暂不开放
                 'pos_des': [0.0, 0.0, 0.0],  # 当前暂不开放
@@ -228,8 +245,36 @@ class StateMachineNode(Node):
                 'ctrl_point': [0.0, 0.0, 0.0],  # 当前暂不开放
                 'foot_pose': [0.0, 0.0, 0.0],   # 当前暂不开放
                 'step_height': [0.05, 0.05],    # 抬腿高度，默认0.05m
-                'frequency': 5.0,
-                'count': 5
+                'duration': 0,           # 持续时间
+                'is_service_call': True  # 标记为服务调用
+            },
+            # 运动类型8: 站立，使用服务调用
+            'stand': {
+                'motion_id': 111,        # 站立
+                'cmd_source': 4,         # 指令来源: 4=Algo
+                'vel_des': [0.0, 0.0, 0.0],  # [x, y(≤1.5), yaw(≤2.0)] m/s
+                'rpy_des': [0.0, 0.0, 0.0],  # 当前暂不开放
+                'pos_des': [0.0, 0.0, 0.0],  # 当前暂不开放
+                'acc_des': [0.0, 0.0, 0.0],  # 当前暂不开放
+                'ctrl_point': [0.0, 0.0, 0.0],  # 当前暂不开放
+                'foot_pose': [0.0, 0.0, 0.0],   # 当前暂不开放
+                'step_height': [0.05, 0.05],    # 抬腿高度，默认0.05m
+                'duration': 0,           # 持续时间
+                'is_service_call': True  # 标记为服务调用
+            },
+            # 运动类型9: 高阻尼趴下，使用服务调用
+            'lie_down': {
+                'motion_id': 101,        # 高阻尼趴下
+                'cmd_source': 4,         # 指令来源: 4=Algo
+                'vel_des': [0.0, 0.0, 0.0],  # [x, y(≤1.5), yaw(≤2.0)] m/s
+                'rpy_des': [0.0, 0.0, 0.0],  # 当前暂不开放
+                'pos_des': [0.0, 0.0, 0.0],  # 当前暂不开放
+                'acc_des': [0.0, 0.0, 0.0],  # 当前暂不开放
+                'ctrl_point': [0.0, 0.0, 0.0],  # 当前暂不开放
+                'foot_pose': [0.0, 0.0, 0.0],   # 当前暂不开放
+                'step_height': [0.05, 0.05],    # 抬腿高度，默认0.05m
+                'duration': 0,           # 持续时间
+                'is_service_call': True  # 标记为服务调用
             }
         }
         
@@ -258,6 +303,12 @@ class StateMachineNode(Node):
             10
         )
         
+        # 运动控制服务客户端 - 用于站立、趴下、急停等
+        self.motion_service_client = self.create_client(
+            MotionResultCmd,
+            'mi_desktop_48_b0_2d_7b_03_d0/motion_result_cmd'
+        )
+        
         # 二维码信息订阅者
         self.qr_info_subscription = self.create_subscription(
             String,
@@ -279,7 +330,23 @@ class StateMachineNode(Node):
             '/state_machine/start_command',
             self.start_command_callback,
             10
-        )            
+        )
+        
+        # 鱼眼相机图像订阅者 (1000x800 RG10)
+        self.fisheye_image_subscription = self.create_subscription(
+            Image,
+            '/image_right',
+            self.fisheye_image_callback,
+            10
+        )
+        
+        # RGB相机图像订阅者 (1600x1200 RG10)
+        self.rgb_image_subscription = self.create_subscription(
+            Image,
+            '/image_rgb',
+            self.rgb_image_callback,
+            10
+        )
         
     def start_command_callback(self, msg):
         """处理启动命令"""
@@ -319,6 +386,96 @@ class StateMachineNode(Node):
         except Exception as e:
             self.get_logger().error(f'处理二维码信息时出错: {str(e)}')
     
+    def fisheye_image_callback(self, msg):
+        """鱼眼相机图像回调"""
+        try:
+            self.fisheye_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+            
+            # 如果正在等待鱼眼图像位置检查
+            if self.position_check_pending and self.position_check_type == 'fisheye':
+                self.check_fisheye_position()
+                
+        except Exception as e:
+            self.get_logger().error(f'处理鱼眼相机图像时出错: {str(e)}')
+    
+    def rgb_image_callback(self, msg):
+        """RGB相机图像回调"""
+        try:
+            self.rgb_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+            
+            # 如果正在等待RGB图像位置检查
+            if self.position_check_pending and self.position_check_type == 'rgb':
+                self.check_rgb_position()
+                
+        except Exception as e:
+            self.get_logger().error(f'处理RGB相机图像时出错: {str(e)}')
+    
+    def check_fisheye_position(self):
+        """检查鱼眼相机中的位置"""
+        if self.fisheye_image is None:
+            print("[状态机] 鱼眼图像未就绪，等待...")
+            return
+        
+        position = self.yellow_line_detector.detect_position(self.fisheye_image)
+        print(f"[状态机] 鱼眼相机检测位置: {position}")
+        
+        self.position_check_pending = False
+        
+        if position == 'left':
+            print("[状态机] 靠近左线，向后走一步")
+            self.execute_position_correction('backward')
+        elif position == 'right':
+            print("[状态机] 靠近右线，向前走一步")
+            self.execute_position_correction('forward')
+        else:
+            print("[状态机] 位置正确，进入下一阶段")
+            self.proceed_to_next_stage()
+    
+    def check_rgb_position(self):
+        """检查RGB相机中的位置"""
+        if self.rgb_image is None:
+            print("[状态机] RGB图像未就绪，等待...")
+            return
+        
+        position = self.yellow_line_detector.detect_position(self.rgb_image)
+        print(f"[状态机] RGB相机检测位置: {position}")
+        
+        self.position_check_pending = False
+        
+        if position == 'left':
+            print("[状态机] 靠近左线，向右转一步")
+            self.execute_position_correction('turn_right', {'count': 1})
+        elif position == 'right':
+            print("[状态机] 靠近右线，向左转一步")
+            self.execute_position_correction('turn_left', {'count': 1})
+        else:
+            print("[状态机] 位置正确，进入下一阶段")
+            self.proceed_to_next_stage()
+    
+    def execute_position_correction(self, movement_type, custom_params=None):
+        """执行位置修正"""
+        print(f"[状态机] 执行位置修正: {movement_type}")
+        if custom_params is None:
+            custom_params = {'count': 1}  # 只执行一步
+        self.send_motion_command(movement_type, custom_params)
+        
+        # 修正完成后，重新检查位置
+        self.create_timer(3.0, self.restart_position_check, one_shot=True)
+    
+    def restart_position_check(self):
+        """重新开始位置检查"""
+        self.position_check_pending = True
+        if self.position_check_type == 'fisheye':
+            self.check_fisheye_position()
+        else:
+            self.check_rgb_position()
+    
+    def proceed_to_next_stage(self):
+        """进入下一阶段"""
+        # 继续执行运动序列的下一个动作
+        self.movement_step += 1
+        self.execute_next_movement()
+    
     def transition_to_state(self, new_state):
         """状态转换"""
         if new_state != self.current_state:
@@ -346,6 +503,8 @@ class StateMachineNode(Node):
             State.QRA_TO_A2: "从二维码A点运动到A2点",
             State.IN_A1: "在A1点停止",
             State.IN_A2: "在A2点停止",
+            State.A1_TO_S1: "从A1点运动到S1点",
+            State.A2_TO_S1: "从A2点运动到S1点",
             State.END: "任务结束",
             State.ERROR: "错误"
         }
@@ -373,20 +532,24 @@ class StateMachineNode(Node):
             self.start_in_a1_sequence()
         elif state == State.IN_A2:
             self.start_in_a2_sequence()
+        elif state == State.A1_TO_S1:
+            self.start_a1_to_s1_sequence()
+        elif state == State.A2_TO_S1:
+            self.start_a2_to_s1_sequence()
         elif state == State.END:
             self.on_task_completed()
         elif state == State.ERROR:
             self.on_error_state()
     
     def start_to_qra_sequence(self):
-        """start_to_qra状态：执行运动类型1,然后执行运动类型5,然后执行运动类型1"""
+        """start_to_qra状态：站起->前进->检查鱼眼位置->右转->检查RGB位置"""
         print("[状态机] 开始start_to_qra运动序列")
-        # 修改为支持自定义参数的格式: (运动类型, 自定义参数字典)
-        # None表示使用默认参数
         self.movement_sequence = [
-            ('forward', {'count': 10}),                    # 第一个forward使用默认参数
-            ('turn_right', {'count': 11}),                 # turn_right使用默认参数
-            ('forward', {'count': 23})            # 第二个forward使用自定义count=23
+            ('stand', None),                               # 运动类型8: 站立
+            ('forward', {'count': 10}),                    # 运动类型1: 向前
+            ('check_fisheye_position', None),              # 检查鱼眼相机位置
+            ('turn_right', {'count': 11}),                 # 运动类型5: 右转
+            ('check_rgb_position', None),                  # 检查RGB相机位置
         ]
         self.movement_step = 0
         self.execute_next_movement()
@@ -395,6 +558,7 @@ class StateMachineNode(Node):
         """qra_to_a1状态：执行运动类型3,然后执行运动类型2"""
         print("[状态机] 开始qra_to_a1运动序列")
         self.movement_sequence = [
+            ('forward', {'count': 23}),                     # 运动类型1: 向前
             ('right', {'count': 21}), 
             ('backward', {'count': 8})
         ]
@@ -405,6 +569,7 @@ class StateMachineNode(Node):
         """qra_to_a2状态：执行运动类型4,然后执行运动类型2"""
         print("[状态机] 开始qra_to_a2运动序列")
         self.movement_sequence = [
+            ('forward', {'count': 23}),                     # 运动类型1: 向前
             ('left', {'count': 21}), 
             ('backward', {'count': 8})
         ]
@@ -412,16 +577,42 @@ class StateMachineNode(Node):
         self.execute_next_movement()
     
     def start_in_a1_sequence(self):
-        """in_a1状态：执行运动类型7"""
+        """in_a1状态：执行运动类型9"""
         print("[状态机] 开始in_a1运动序列")
-        self.movement_sequence = ['stop']
+        self.movement_sequence = ['lie_down']
         self.movement_step = 0
         self.execute_next_movement()
     
     def start_in_a2_sequence(self):
-        """in_a2状态：执行运动类型7"""
+        """in_a2状态：执行运动类型9"""
         print("[状态机] 开始in_a2运动序列")
-        self.movement_sequence = ['stop']
+        self.movement_sequence = ['lie_down']
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_a1_to_s1_sequence(self):
+        """a1_to_s1状态：执行运动类型8,然后执行任务1,然后执行任务4,然后执行任务2,然后执行任务6"""
+        print("[状态机] 开始a1_to_s1运动序列")
+        self.movement_sequence = [
+            ('stand', None),                               # 运动类型8: 站立
+            ('forward', {'count': 8}),                    # 任务1: 向前
+            ('left', {'count': 21}),                       # 任务4: 向左
+            ('backward', {'count': 23}),                    # 任务2: 向后
+            ('turn_left', {'count': 11})                   # 任务6: 左转
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_a2_to_s1_sequence(self):
+        """a2_to_s1状态：执行运动类型8,然后执行任务1,然后执行任务3,然后执行任务2,然后执行任务6"""
+        print("[状态机] 开始a2_to_s1运动序列")
+        self.movement_sequence = [
+            ('stand', None),                               # 运动类型8: 站立
+            ('forward', {'count': 8}),                    # 任务1: 向前
+            ('right', {'count': 21}),                      # 任务3: 向右
+            ('backward', {'count': 23}),                    # 任务2: 向后
+            ('turn_left', {'count': 11})                   # 任务6: 左转
+        ]
         self.movement_step = 0
         self.execute_next_movement()
     
@@ -458,18 +649,22 @@ class StateMachineNode(Node):
             print("[状态机] qra_to_a2运动序列完成，进入in_a2状态")
             self.transition_to_state(State.IN_A2)
         elif self.current_state == State.IN_A1:
-            print("[状态机] in_a1运动序列完成，进入end状态")
-            self.transition_to_state(State.END)
+            print("[状态机] in_a1运动序列完成，进入a1_to_s1状态")
+            self.transition_to_state(State.A1_TO_S1)
         elif self.current_state == State.IN_A2:
-            print("[状态机] in_a2运动序列完成，进入end状态")
+            print("[状态机] in_a2运动序列完成，进入a2_to_s1状态")
+            self.transition_to_state(State.A2_TO_S1)
+        elif self.current_state == State.A1_TO_S1:
+            print("[状态机] a1_to_s1运动序列完成，进入end状态")
+            self.transition_to_state(State.END)
+        elif self.current_state == State.A2_TO_S1:
+            print("[状态机] a2_to_s1运动序列完成，进入end状态")
             self.transition_to_state(State.END)
     
     def start_qr_detection(self):
         """开始在qr_a点进行二维码识别"""
         print("[状态机] 到达二维码A点，开始二维码识别")
         self.qr_detection_start_time = time.time()
-        self.qr_result = None
-        
         # 停止运动，准备识别
         self.stop_motion_timer()
     
@@ -495,17 +690,31 @@ class StateMachineNode(Node):
     
     def on_error_state(self):
         """错误状态处理"""
-        print("[状态机] 进入错误状态，停止运动")
+        print("[状态机] 进入错误状态，急停运动")
         
         # 停止运动定时器
         self.stop_motion_timer()
         
         # 急停
-        self.send_motion_command('stop')
+        self.send_motion_command('lie_down')
     
     def send_motion_command(self, movement_type, custom_params=None):
-        """发送运动指令 - 支持持续发布（类似ros2 topic pub -r 频率 -t 次数）"""
+        """发送运动指令 - 支持持续发布（类似ros2 topic pub -r 频率 -t 次数）和服务调用"""
         try:
+            # 处理特殊的检查命令
+            if movement_type == 'check_fisheye_position':
+                print("[状态机] 开始鱼眼相机位置检查")
+                self.position_check_pending = True
+                self.position_check_type = 'fisheye'
+                self.check_fisheye_position()
+                return
+            elif movement_type == 'check_rgb_position':
+                print("[状态机] 开始RGB相机位置检查")
+                self.position_check_pending = True
+                self.position_check_type = 'rgb'
+                self.check_rgb_position()
+                return
+            
             # 停止之前的运动定时器
             if self.motion_timer is not None:
                 self.motion_timer.cancel()
@@ -529,6 +738,12 @@ class StateMachineNode(Node):
             
             self.current_motion_config = config
             self.motion_count = 0
+            
+            # 检查是否为服务调用类型
+            if config.get('is_service_call', False):
+                print(f"[状态机] 开始服务调用运动: {movement_type}")
+                self._call_motion_service(config)
+                return
             
             # 获取发布频率和次数
             frequency = config['frequency']
@@ -594,6 +809,45 @@ class StateMachineNode(Node):
 
         except Exception as e:
             self.get_logger().error(f'发布运动消息时出错: {str(e)}')
+    
+    def _call_motion_service(self, config):
+        """调用运动控制服务"""
+        try:
+            # 创建服务请求
+            request = MotionResultCmd.Request()
+            request.motion_id = config['motion_id']
+            request.cmd_source = config['cmd_source']
+            request.vel_des = config['vel_des']
+            request.rpy_des = config['rpy_des']
+            request.pos_des = config['pos_des']
+            request.acc_des = config['acc_des']
+            request.ctrl_point = config['ctrl_point']
+            request.foot_pose = config['foot_pose']
+            request.step_height = config['step_height']
+            request.duration = config['duration']
+            
+            print(f"[状态机] 调用运动服务: motion_id={config['motion_id']}, duration={config['duration']}s")
+            
+            # 异步调用服务
+            future = self.motion_service_client.call_async(request)
+            future.add_done_callback(self._service_callback)
+            
+        except Exception as e:
+            self.get_logger().error(f'调用运动服务时出错: {str(e)}')
+            # 服务调用失败，直接进入下一个运动
+            self.on_single_movement_completed()
+    
+    def _service_callback(self, future):
+        """服务调用回调"""
+        try:
+            response = future.result()
+            print(f"[状态机] 运动服务调用完成: {response}")
+            # 服务调用完成，进入下一个运动
+            self.on_single_movement_completed()
+        except Exception as e:
+            self.get_logger().error(f'运动服务调用失败: {str(e)}')
+            # 服务调用失败，直接进入下一个运动
+            self.on_single_movement_completed()
         
     def _motion_timer_callback(self):
         """运动控制定时器回调 - 按频率持续发布指令"""

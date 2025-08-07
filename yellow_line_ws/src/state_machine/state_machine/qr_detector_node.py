@@ -26,7 +26,8 @@ class QRDetectorNode(Node):
         self.focal_length = self.declare_parameter('focal_length', 1144.0).value  # 焦距
         
         # 图像话题名称 - 可通过参数配置
-        self.image_topic = self.declare_parameter('image_topic', '/mi_desktop_48_b0_2d_7b_03_d0/image').value
+        self.image_topic = self.declare_parameter(
+            'image_topic', '/image_rgb').value
         
         
         # 调试模式 - 可通过参数配置

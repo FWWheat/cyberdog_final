@@ -24,6 +24,7 @@ setup(
         'console_scripts': [
             'state_machine_node = state_machine.state_machine_node:main',
             'qr_detector_node = state_machine.qr_detector_node:main',
+            'voice_node = state_machine.voice_node:main',
         ],
     },
 ) 

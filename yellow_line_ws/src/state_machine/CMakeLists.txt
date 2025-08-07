@@ -12,10 +12,18 @@ ament_python_install_package(${PROJECT_NAME})
 # Install Python executables
 install(PROGRAMS
   state_machine/state_machine_node.py
-  state_machine/qr_detector_node.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME state_machine_node
+)
+install(PROGRAMS
+  state_machine/qr_detector_node.py
+  DESTINATION lib/${PROJECT_NAME}
   RENAME qr_detector_node
+)
+install(PROGRAMS
+  state_machine/voice_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME voice_node
 )
 
 ament_package() 
