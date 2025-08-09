@@ -75,6 +75,7 @@ MotionServoCmd接口规范：
 
 """
 
+from itertools import count
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -87,8 +88,8 @@ from protocol.srv import MotionResultCmd
 # 导入图像消息类型
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
-# 导入黄线检测器
-from .yellow_line_detector import YellowLineDetector
+# 导入黄线检测器 - 使用包名导入
+from state_machine.yellow_line_detector import YellowLineDetector
 
 class State(Enum):
     """状态机状态枚举 - 根据状态机超详细说明.md"""
@@ -122,6 +123,7 @@ class StateMachineNode(Node):
         
         # 图像处理相关
         self.bridge = CvBridge()
+        # 使用统一的黄线检测器处理所有图像
         self.yellow_line_detector = YellowLineDetector()
         self.fisheye_image = None
         self.rgb_image = None
@@ -160,7 +162,7 @@ class StateMachineNode(Node):
                 'cmd_type': 1,           # 指令类型: 1=Data, 2=End
                 'cmd_source': 4,         # 指令来源: 4=Algo
                 'value': 0,              # 0=内八步态, 2=垂直步态
-                'vel_des': [-0.4, 0.0, 0.0], # [x, y(≤1.5), yaw(≤2.0)] m/s
+                'vel_des': [-0.3, 0.0, 0.0], # [x, y(≤1.5), yaw(≤2.0)] m/s
                 'rpy_des': [0.0, 0.0, 0.0],  # 当前暂不开放
                 'pos_des': [0.0, 0.0, 0.0],  # 当前暂不开放
                 'acc_des': [0.0, 0.0, 0.0],  # 当前暂不开放
@@ -277,11 +279,18 @@ class StateMachineNode(Node):
                 'is_service_call': True  # 标记为服务调用
             }
         }
+
         
         # 运动控制定时器和当前配置
         self.motion_timer = None
         self.current_motion_config = None
         self.motion_count = 0  # 当前运动指令发送次数
+        
+        # lie_down等待相关
+        self.lie_down_wait_timer = None
+        self.pending_lie_down_params = None
+        self.lie_down_final_timer = None
+        self.position_check_restart_timer = None
         
         # 创建发布者和订阅者
         self.setup_communication()
@@ -416,6 +425,14 @@ class StateMachineNode(Node):
             print("[状态机] 鱼眼图像未就绪，等待...")
             return
         
+        # 保存关键鱼眼图像用于调试
+        import cv2
+        import time
+        timestamp = int(time.time())
+        debug_image_path = f"/tmp/fisheye_debug_{timestamp}.jpg"
+        cv2.imwrite(debug_image_path, self.fisheye_image)
+        print(f"[状态机] 已保存鱼眼调试图像: {debug_image_path}")
+        
         position = self.yellow_line_detector.detect_position(self.fisheye_image)
         print(f"[状态机] 鱼眼相机检测位置: {position}")
         
@@ -423,10 +440,10 @@ class StateMachineNode(Node):
         
         if position == 'left':
             print("[状态机] 靠近左线，向后走一步")
-            self.execute_position_correction('backward')
+            self.execute_position_correction('backward',{'count': 1})
         elif position == 'right':
             print("[状态机] 靠近右线，向前走一步")
-            self.execute_position_correction('forward')
+            self.execute_position_correction('forward',{'count': 1})
         else:
             print("[状态机] 位置正确，进入下一阶段")
             self.proceed_to_next_stage()
@@ -460,7 +477,16 @@ class StateMachineNode(Node):
         self.send_motion_command(movement_type, custom_params)
         
         # 修正完成后，重新检查位置
-        self.create_timer(3.0, self.restart_position_check, one_shot=True)
+        self.position_check_restart_timer = self.create_timer(3.0, self.restart_position_check_callback)
+    
+    def restart_position_check_callback(self):
+        """重新开始位置检查的回调"""
+        # 取消定时器
+        if hasattr(self, 'position_check_restart_timer'):
+            self.position_check_restart_timer.cancel()
+            self.position_check_restart_timer = None
+        
+        self.restart_position_check()
     
     def restart_position_check(self):
         """重新开始位置检查"""
@@ -546,7 +572,7 @@ class StateMachineNode(Node):
         print("[状态机] 开始start_to_qra运动序列")
         self.movement_sequence = [
             ('stand', None),                               # 运动类型8: 站立
-            ('forward', {'count': 10}),                    # 运动类型1: 向前
+            ('forward', {'count': 12}),                    # 运动类型1: 向前
             ('check_fisheye_position', None),              # 检查鱼眼相机位置
             ('turn_right', {'count': 11}),                 # 运动类型5: 右转
             ('check_rgb_position', None),                  # 检查RGB相机位置
@@ -560,7 +586,7 @@ class StateMachineNode(Node):
         self.movement_sequence = [
             ('forward', {'count': 23}),                     # 运动类型1: 向前
             ('right', {'count': 21}), 
-            ('backward', {'count': 8})
+            ('backward', {'count': 9})
         ]
         self.movement_step = 0
         self.execute_next_movement()
@@ -571,7 +597,7 @@ class StateMachineNode(Node):
         self.movement_sequence = [
             ('forward', {'count': 23}),                     # 运动类型1: 向前
             ('left', {'count': 21}), 
-            ('backward', {'count': 8})
+            ('backward', {'count': 9})
         ]
         self.movement_step = 0
         self.execute_next_movement()
@@ -580,6 +606,7 @@ class StateMachineNode(Node):
         """in_a1状态：执行运动类型9"""
         print("[状态机] 开始in_a1运动序列")
         self.movement_sequence = ['lie_down']
+
         self.movement_step = 0
         self.execute_next_movement()
     
@@ -595,9 +622,9 @@ class StateMachineNode(Node):
         print("[状态机] 开始a1_to_s1运动序列")
         self.movement_sequence = [
             ('stand', None),                               # 运动类型8: 站立
-            ('forward', {'count': 8}),                    # 任务1: 向前
+            ('forward', {'count': 9}),                    # 任务1: 向前
             ('left', {'count': 21}),                       # 任务4: 向左
-            ('backward', {'count': 23}),                    # 任务2: 向后
+            ('backward', {'count': 24}),                    # 任务2: 向后
             ('turn_left', {'count': 11})                   # 任务6: 左转
         ]
         self.movement_step = 0
@@ -608,9 +635,9 @@ class StateMachineNode(Node):
         print("[状态机] 开始a2_to_s1运动序列")
         self.movement_sequence = [
             ('stand', None),                               # 运动类型8: 站立
-            ('forward', {'count': 8}),                    # 任务1: 向前
+            ('forward', {'count': 9}),                    # 任务1: 向前
             ('right', {'count': 21}),                      # 任务3: 向右
-            ('backward', {'count': 23}),                    # 任务2: 向后
+            ('backward', {'count': 24}),                    # 任务2: 向后
             ('turn_left', {'count': 11})                   # 任务6: 左转
         ]
         self.movement_step = 0
@@ -715,6 +742,34 @@ class StateMachineNode(Node):
                 self.check_rgb_position()
                 return
             
+            # 检查是否是lie_down动作，如果是则先等待5秒
+            if movement_type == 'lie_down':
+                print("[状态机] 准备执行lie_down，先等待5秒让机器人稳定...")
+                self.lie_down_wait_timer = self.create_timer(5.0, self._execute_lie_down_after_wait_callback)
+                self.pending_lie_down_params = custom_params
+                return
+            
+            # 执行其他运动指令
+            self._execute_motion_command(movement_type, custom_params)
+            
+        except Exception as e:
+            self.get_logger().error(f'发送运动指令时出错: {str(e)}')
+    
+    def _execute_lie_down_after_wait_callback(self):
+        """等待后执行lie_down的回调"""
+        print("[状态机] 等待完成，现在执行lie_down")
+        # 取消定时器
+        if hasattr(self, 'lie_down_wait_timer'):
+            self.lie_down_wait_timer.cancel()
+            self.lie_down_wait_timer = None
+        
+        # 执行lie_down
+        self._execute_motion_command('lie_down', self.pending_lie_down_params)
+        self.pending_lie_down_params = None
+    
+    def _execute_motion_command(self, movement_type, custom_params=None):
+        """实际执行运动指令"""
+        try:
             # 停止之前的运动定时器
             if self.motion_timer is not None:
                 self.motion_timer.cancel()
@@ -842,12 +897,32 @@ class StateMachineNode(Node):
         try:
             response = future.result()
             print(f"[状态机] 运动服务调用完成: {response}")
-            # 服务调用完成，进入下一个运动
-            self.on_single_movement_completed()
+            
+            # 检查是否是lie_down动作
+            if (hasattr(self, 'current_motion_config') and 
+                self.current_motion_config and 
+                self.current_motion_config.get('motion_id') == 101):
+                print("[状态机] lie_down动作完成，等待10秒...")
+                # 创建10秒延时定时器
+                self.lie_down_final_timer = self.create_timer(10.0, self.on_lie_down_wait_completed_callback)
+            else:
+                # 其他服务调用完成，直接进入下一个运动
+                self.on_single_movement_completed()
+                
         except Exception as e:
             self.get_logger().error(f'运动服务调用失败: {str(e)}')
             # 服务调用失败，直接进入下一个运动
             self.on_single_movement_completed()
+    
+    def on_lie_down_wait_completed_callback(self):
+        """lie_down最终等待完成回调"""
+        # 取消定时器
+        if hasattr(self, 'lie_down_final_timer'):
+            self.lie_down_final_timer.cancel()
+            self.lie_down_final_timer = None
+        
+        print("[状态机] lie_down等待10秒完成，继续执行")
+        self.on_single_movement_completed()
         
     def _motion_timer_callback(self):
         """运动控制定时器回调 - 按频率持续发布指令"""

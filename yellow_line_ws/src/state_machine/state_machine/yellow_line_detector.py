@@ -27,23 +27,20 @@ class YellowLineDetector:
     def __init__(self, 
                  lower_yellow: Tuple[int, int, int] = (15, 80, 80),
                  upper_yellow: Tuple[int, int, int] = (35, 255, 255),
-                 position_threshold: float = 0.15,
-                 hough_threshold: int = 50,
-                 roi_bottom_ratio: float = 0.6):
+                 position_threshold: float = 0.05,
+                 roi_bottom_ratio: float = 0.4):
         """
         初始化黄线检测器
         
         Args:
             lower_yellow: HSV黄色下限 (H, S, V) - 调整为更宽泛的黄色范围
             upper_yellow: HSV黄色上限 (H, S, V)
-            position_threshold: 位置判断阈值（图像宽度的百分比）- 增加容差
-            hough_threshold: 霍夫变换阈值 - 降低以检测更多线条
+            position_threshold: 位置判断阈值（图像宽度的百分比）
             roi_bottom_ratio: ROI区域比例（图像下方多少比例）
         """
         self.lower_yellow = np.array(lower_yellow)
         self.upper_yellow = np.array(upper_yellow)
         self.position_threshold = position_threshold
-        self.hough_threshold = hough_threshold
         self.roi_bottom_ratio = roi_bottom_ratio
         
         # 形态学操作核
@@ -102,7 +99,7 @@ class YellowLineDetector:
     def detect_position(self, image: np.ndarray) -> str:
         """
         检测机器人在两条黄色纵向平行线中的位置
-        针对鱼眼相机图像进行优化
+        适用于鱼眼相机和RGB相机，使用统一的处理方法
         
         Args:
             image: 输入图像 (BGR格式)
@@ -115,6 +112,10 @@ class YellowLineDetector:
         
         try:
             # 获取图像尺寸
+            if len(image.shape) != 3:
+                print(f"[黄线检测] 错误：图像不是3通道，shape: {image.shape}")
+                return 'center'
+            
             height, width = image.shape[:2]
             
             # 提取ROI区域（图像下方部分）
@@ -133,8 +134,15 @@ class YellowLineDetector:
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.morph_kernel)
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.morph_kernel)
             
-            # 方法1: 基于轮廓的质心检测
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # 基于轮廓的质心检测（统一处理方法）
+            contour_result = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # 兼容OpenCV不同版本
+            if len(contour_result) == 3:
+                # OpenCV 3.x: (image, contours, hierarchy)
+                _, contours, _ = contour_result
+            else:
+                # OpenCV 4.x: (contours, hierarchy)
+                contours, _ = contour_result
             
             if contours:
                 # 找到最大的几个轮廓（假设是黄线）
@@ -152,21 +160,23 @@ class YellowLineDetector:
                 
                 print(f"[黄线检测] 检测到 {len(centroids)} 个轮廓质心: {centroids}")
                 
+                # 计算图像中心
+                image_center = width / 2
+                threshold = width * self.position_threshold
+                
+                print(f"[黄线检测] 图像中心: {image_center}, 位置阈值: {self.position_threshold} ({threshold:.1f}像素)")
+                
                 if len(centroids) >= 2:
-                    # 找到最左和最右的质心
+                    # 两个或更多质心：找到最左和最右的质心
                     left_centroid = min(centroids)
                     right_centroid = max(centroids)
                     
-                    # 计算图像中心和黄线中心
-                    image_center = width / 2
+                    # 计算黄线中心
                     lines_center = (left_centroid + right_centroid) / 2
                     
-                    print(f"[黄线检测] 图像中心: {image_center}, 黄线中心: {lines_center}")
-                    print(f"[黄线检测] 左质心: {left_centroid}, 右质心: {right_centroid}")
+                    print(f"[黄线检测] 左质心: {left_centroid}, 右质心: {right_centroid}, 黄线中心: {lines_center}")
                     
-                    # 判断机器人位置
-                    threshold = width * self.position_threshold
-                    
+                    # 判断机器人位置（统一逻辑）
                     if image_center < lines_center - threshold:
                         print(f"[黄线检测] 位置判断: LEFT (偏移: {lines_center - image_center:.1f})")
                         return 'left'
@@ -178,58 +188,26 @@ class YellowLineDetector:
                         return 'center'
                         
                 elif len(centroids) == 1:
-                    # 只检测到一个轮廓，根据其位置判断
+                    # 只检测到一个轮廓：根据质心位置相对于图像中心判断（统一逻辑）
                     centroid = centroids[0]
-                    image_center = width / 2
                     
-                    print(f"[黄线检测] 只检测到一个轮廓质心: {centroid}")
+                    print(f"[黄线检测] 只检测到一个轮廓质心: {centroid}, 图像中心: {image_center}")
                     
-                    if centroid < image_center - width * 0.2:
-                        print("[黄线检测] 单轮廓位置判断: 可能靠近右边")
-                        return 'right'
-                    elif centroid > image_center + width * 0.2:
-                        print("[黄线检测] 单轮廓位置判断: 可能靠近左边")
+                    if centroid < image_center:
+                        print("[黄线检测] 质心在画面左侧，判定机器人偏左")
                         return 'left'
-            
-            # 方法2: 霍夫直线检测（作为备选）
-            edges = cv2.Canny(mask, 30, 100, apertureSize=3)
-            lines = cv2.HoughLines(edges, 1, np.pi/180, threshold=self.hough_threshold)
-            
-            if lines is not None:
-                vertical_lines = []
-                for line in lines:
-                    rho, theta = line[0]
-                    # 扩大角度范围以适应鱼眼畸变
-                    angle = np.degrees(theta)
-                    if (70 <= angle <= 110) or (-20 <= angle <= 20):
-                        if np.sin(theta) != 0:
-                            x = rho / np.sin(theta)
-                            if 0 <= x <= width:
-                                vertical_lines.append(x)
-                
-                print(f"[黄线检测] 霍夫检测到 {len(vertical_lines)} 条直线: {vertical_lines}")
-                
-                if len(vertical_lines) >= 2:
-                    left_line = min(vertical_lines)
-                    right_line = max(vertical_lines)
-                    image_center = width / 2
-                    lines_center = (left_line + right_line) / 2
-                    threshold = width * self.position_threshold
-                    
-                    print(f"[黄线检测] 霍夫方法 - 图像中心: {image_center}, 直线中心: {lines_center}")
-                    
-                    if image_center < lines_center - threshold:
-                        return 'left'
-                    elif image_center > lines_center + threshold:
-                        return 'right'
                     else:
-                        return 'center'
+                        print("[黄线检测] 质心在画面右侧，判定机器人偏右") 
+                        return 'right'
             
             print("[黄线检测] 未能检测到足够的特征，默认返回center")
             return 'center'
             
         except Exception as e:
             print(f"[黄线检测] 位置检测出错: {str(e)}")
+            print(f"[黄线检测] 图像信息: shape={image.shape if image is not None else 'None'}")
+            import traceback
+            print(f"[黄线检测] 错误详情: {traceback.format_exc()}")
             return 'center'
     
     def visualize_detection(self, image: np.ndarray, save_path: Optional[str] = None) -> np.ndarray:
@@ -306,8 +284,7 @@ class YellowLineDetector:
             param_text = [
                 f"HSV: {self.lower_yellow} - {self.upper_yellow}",
                 f"Threshold: {self.position_threshold:.2f}",
-                f"ROI: {self.roi_bottom_ratio:.1f}",
-                f"Hough: {self.hough_threshold}"
+                f"ROI: {self.roi_bottom_ratio:.1f}"
             ]
             
             for i, text in enumerate(param_text):
