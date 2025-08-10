@@ -28,6 +28,10 @@ setup(
             'state_machine_node = state_machine.state_machine_node:main',
             'qr_detector_node = state_machine.qr_detector_node:main',
             'voice_node = state_machine.voice_node:main',
+            'green_arrow_detector = state_machine.green_arrow_detector:main',
+            'red_barrier_detector = state_machine.red_barrier_detector:main',
+            'yellow_marker_detector = state_machine.yellow_marker_detector:main',
+            'yellow_line_walker = state_machine.yellow_line_walker:main',
         ],
     },
 ) 

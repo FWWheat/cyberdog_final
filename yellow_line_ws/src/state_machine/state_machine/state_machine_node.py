@@ -90,6 +90,8 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 # 导入黄线检测器 - 使用包名导入
 from state_machine.yellow_line_detector import YellowLineDetector
+# 导入黄色标志物检测器
+from state_machine.yellow_marker_detector import YellowMarkerDetector
 
 class State(Enum):
     """状态机状态枚举 - 根据状态机超详细说明.md"""
@@ -102,8 +104,44 @@ class State(Enum):
     IN_A2 = 6            # 在A2点停止
     A1_TO_S1 = 7         # 从A1点运动到S1点
     A2_TO_S1 = 8         # 从A2点运动到S1点
-    END = 9              # 任务结束
-    ERROR = 10           # 错误状态
+    IN_S1 = 9            # 在S1点
+    S1_TO_S2 = 10        # 从S1点运动到S2点
+    IN_S2 = 11           # 在S2点
+    S2_TO_L1 = 12        # 从S2点运动到L1点
+    S2_TO_R1 = 13        # 从S2点运动到R1点
+    IN_L1 = 14           # 在L1点
+    IN_R1 = 15           # 在R1点
+    L1_TO_QRB = 16       # 从L1点运动到QRB点
+    R1_TO_QRB = 17       # 从R1点运动到QRB点
+    IN_QRB = 18          # 在QRB点进行识别
+    QRB_TO_B1 = 19       # 从QRB点运动到B1点
+    QRB_TO_B2 = 20       # 从QRB点运动到B2点
+    IN_B1 = 21           # 在B1点
+    IN_B2 = 22           # 在B2点
+    B1_TO_B2 = 23        # 从B1点运动到B2点
+    B2_TO_B1 = 24        # 从B2点运动到B1点
+    B1_TO_L1 = 25        # 从B1点运动到L1点
+    B1_TO_R1 = 26        # 从B1点运动到R1点
+    B2_TO_L1 = 27        # 从B2点运动到L1点
+    B2_TO_R1 = 28        # 从B2点运动到R1点
+    L1_TO_S2 = 29        # 从L1点运动到S2点（返程）
+    R1_TO_S2 = 30        # 从R1点运动到S2点（返程）
+    IN_S2_R = 31         # 在S2点（返程）
+    S2_TO_S1 = 32        # 从S2点运动到S1点（返程）
+    IN_S1_R = 33         # 在S1点（返程）
+    S1_TO_A1 = 34        # 从S1点运动到A1点（返程）
+    S1_TO_A2 = 35        # 从S1点运动到A2点（返程）
+    A1_TO_START = 36     # 从A1点运动到起点
+    A2_TO_START = 37     # 从A2点运动到起点
+    YELLOW_LIGHT_STOP = 38 # 在黄灯前停止倒计时
+    YELLOW_LIGHT_COUNTDOWN = 39 # 黄灯倒计时状态
+    CURVE_TRACK_FOLLOW = 40    # 曲线赛道黄线跟踪
+    DOCK_APPROACH = 41         # 接近库位
+    DOCK_ENTER = 42           # 进入库位
+    DOCK_LYING = 43           # 在库位内趴下等待
+    CHARGE_RETURN = 44        # 返回充电站
+    END = 45             # 任务结束
+    ERROR = 46           # 错误状态
 
 class StateMachineNode(Node):
     def __init__(self):
@@ -118,17 +156,35 @@ class StateMachineNode(Node):
         
         # 二维码识别结果
         self.qr_result = None
+        self.initial_qr_result = None  # 初始A点二维码结果，用于返程时的逻辑判断
+        self.qrb_result = None  # QRB点的二维码结果
         self.qr_detection_timeout = 10.0  # 二维码识别超时时间（秒）
         self.qr_detection_start_time = None
+        
+        # 前进步数记录器 - 记录前进运动(速度为[0.4,0,0])的步数
+        self.x1_steps = 0  # S2到L1路径中前进到红色限高杆的步数
+        self.y1_steps = 0  # S2到R1路径中前进到黄色标志物的步数
+        self.x2_steps = 0  # B1/B2到L1路径中前进到红色限高杆的步数
+        self.y2_steps = 0  # B1/B2到R1路径中前进到黄色标志物的步数
         
         # 图像处理相关
         self.bridge = CvBridge()
         # 使用统一的黄线检测器处理所有图像
         self.yellow_line_detector = YellowLineDetector()
+        # 黄色标志物检测器实例（用于黄灯检测）
+        self.yellow_marker_detector = YellowMarkerDetector()
         self.fisheye_image = None
         self.rgb_image = None
         self.position_check_pending = False
         self.position_check_type = None  # 'fisheye' or 'rgb'
+        
+        # 黄灯检测相关
+        self.yellow_light_detected = False
+        self.yellow_light_distance = None
+        self.yellow_light_stop_position_reached = False
+        self.countdown_timer = None
+        self.countdown_seconds = 5  # 倒计时秒数
+        self.current_countdown = 0
         
         # 运动控制参数
         self.movement_timeout = 30.0  # 运动超时时间（秒）
@@ -357,6 +413,45 @@ class StateMachineNode(Node):
             10
         )
         
+        # 左鱼眼相机图像订阅者
+        self.left_fisheye_subscription = self.create_subscription(
+            Image,
+            '/image_left',
+            self.left_fisheye_callback,
+            10
+        )
+        
+        # 绿色箭头方向订阅者
+        self.green_arrow_subscription = self.create_subscription(
+            String,
+            '/green_arrow_detector/direction',
+            self.green_arrow_callback,
+            10
+        )
+        
+        # 红色限高杆距离订阅者
+        self.red_barrier_subscription = self.create_subscription(
+            String,
+            '/red_barrier_detector/distance',
+            self.red_barrier_callback,
+            10
+        )
+        
+        # 黄色标志物距离订阅者
+        self.yellow_marker_subscription = self.create_subscription(
+            String,
+            '/yellow_marker_detector/distance',
+            self.yellow_marker_callback,
+            10
+        )
+        
+        # 两条黄线走中间控制发布者
+        self.yellow_line_control_publisher = self.create_publisher(
+            String,
+            '/yellow_line_walker/command',
+            10
+        )
+        
     def start_command_callback(self, msg):
         """处理启动命令"""
         if msg.data == "START" and self.current_state == State.START and not self.task_completed:
@@ -378,22 +473,103 @@ class StateMachineNode(Node):
     def qr_info_callback(self, msg):
         """处理二维码识别结果"""
         try:
-            # 解析二维码信息
-            # 格式: "QR:A-1,Distance:1.5" 或 "QR:A-2,Distance:1.2"
-            if msg.data.startswith("QR:"):
-                parts = msg.data.split(",")
-                qr_code = parts[0].split(":")[1]
-                distance_str = parts[1].split(":")[1]
-                distance = float(distance_str)
-                
-                self.get_logger().info(f'收到二维码识别结果: {qr_code}, 距离: {distance}m')
-                
-                if self.current_state == State.IN_QR_A:
-                    self.qr_result = qr_code
-                    self.process_qr_result()
+            # 解析二维码信息 - 新格式只包含二维码内容，不包含距离
+            # 格式: "A-1" 或 "A-2" 或 "B-1" 或 "B-2"
+            qr_code = msg.data.strip()
+            
+            self.get_logger().info(f'收到二维码识别结果: {qr_code}')
+            
+            if self.current_state == State.IN_QR_A:
+                self.qr_result = qr_code
+                self.initial_qr_result = qr_code  # 保存初始二维码结果
+                self.process_qr_a_result()
+            elif self.current_state == State.IN_QRB:
+                self.qrb_result = qr_code
+                self.process_qr_b_result()
                     
         except Exception as e:
             self.get_logger().error(f'处理二维码信息时出错: {str(e)}')
+    
+    def left_fisheye_callback(self, msg):
+        """左鱼眼相机图像回调"""
+        try:
+            self.left_fisheye_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+        except Exception as e:
+            self.get_logger().error(f'处理左鱼眼相机图像时出错: {str(e)}')
+    
+    def green_arrow_callback(self, msg):
+        """绿色箭头方向回调"""
+        try:
+            direction = msg.data.strip()
+            self.get_logger().info(f'收到绿色箭头方向: {direction}')
+            
+            if self.current_state == State.IN_S2:
+                if direction == "left":
+                    self.transition_to_state(State.S2_TO_L1)
+                elif direction == "right":
+                    self.transition_to_state(State.S2_TO_R1)
+                else:
+                    self.get_logger().warn(f'未知箭头方向: {direction}')
+        except Exception as e:
+            self.get_logger().error(f'处理绿色箭头方向时出错: {str(e)}')
+    
+    def red_barrier_callback(self, msg):
+        """红色限高杆距离回调"""
+        try:
+            distance = float(msg.data.strip())
+            self.get_logger().info(f'检测到红色限高杆，距离: {distance}')
+            
+            # 根据当前状态和距离信息停止前进并记录步数
+            if self.current_state == State.S2_TO_L1:
+                self.stop_forward_and_record_x1()
+            elif self.current_state in [State.B1_TO_L1, State.B2_TO_L1]:
+                self.stop_forward_and_record_x2()
+                
+        except Exception as e:
+            self.get_logger().error(f'处理红色限高杆距离时出错: {str(e)}')
+    
+    def yellow_marker_callback(self, msg):
+        """黄色标志物距离回调"""
+        try:
+            distance = float(msg.data.strip())
+            self.get_logger().info(f'检测到黄色标志物，距离: {distance}')
+            
+            # 根据当前状态和距离信息停止前进并记录步数
+            if self.current_state == State.S2_TO_R1:
+                self.stop_forward_and_record_y1()
+            elif self.current_state in [State.B1_TO_R1, State.B2_TO_R1]:
+                self.stop_forward_and_record_y2()
+                
+        except Exception as e:
+            self.get_logger().error(f'处理黄色标志物距离时出错: {str(e)}')
+    
+    def stop_forward_and_record_x1(self):
+        """停止前进并记录x1步数"""
+        self.x1_steps = self.motion_count
+        self.get_logger().info(f'记录x1步数: {self.x1_steps}')
+        self.stop_motion_timer()
+        self.transition_to_state(State.IN_L1)
+    
+    def stop_forward_and_record_y1(self):
+        """停止前进并记录y1步数"""
+        self.y1_steps = self.motion_count
+        self.get_logger().info(f'记录y1步数: {self.y1_steps}')
+        self.stop_motion_timer()
+        self.transition_to_state(State.IN_R1)
+    
+    def stop_forward_and_record_x2(self):
+        """停止前进并记录x2步数"""
+        self.x2_steps = self.motion_count
+        self.get_logger().info(f'记录x2步数: {self.x2_steps}')
+        self.stop_motion_timer()
+        self.transition_to_state(State.IN_L1)
+    
+    def stop_forward_and_record_y2(self):
+        """停止前进并记录y2步数"""
+        self.y2_steps = self.motion_count
+        self.get_logger().info(f'记录y2步数: {self.y2_steps}')
+        self.stop_motion_timer()
+        self.transition_to_state(State.IN_R1)
     
     def fisheye_image_callback(self, msg):
         """鱼眼相机图像回调"""
@@ -420,7 +596,7 @@ class StateMachineNode(Node):
             self.get_logger().error(f'处理RGB相机图像时出错: {str(e)}')
     
     def check_fisheye_position(self):
-        """检查鱼眼相机中的位置"""
+        """检查鱼眼相机中的位置 - 机器人前进后用右鱼眼相机检查是否在两条黄线中间"""
         if self.fisheye_image is None:
             print("[状态机] 鱼眼图像未就绪，等待...")
             return
@@ -433,41 +609,262 @@ class StateMachineNode(Node):
         cv2.imwrite(debug_image_path, self.fisheye_image)
         print(f"[状态机] 已保存鱼眼调试图像: {debug_image_path}")
         
-        position = self.yellow_line_detector.detect_position(self.fisheye_image)
+        # 使用右鱼眼相机检测机器人在两条黄线中间的位置
+        position = self.yellow_line_detector.detect_position(
+            self.fisheye_image, 
+            detection_type='ycy',  # 两条黄线中间检测
+            camera_type='fisheye_right',
+            threshold_params={'position_threshold': 0.08, 'area_threshold': 300}
+        )
         print(f"[状态机] 鱼眼相机检测位置: {position}")
         
         self.position_check_pending = False
         
+        # 鱼眼相机位置修正：前进后的前后调整（远离偏向的黄线）
         if position == 'left':
-            print("[状态机] 靠近左线，向后走一步")
-            self.execute_position_correction('backward',{'count': 1})
+            print("[状态机] 机器人偏向左线，向后调整远离左线")
+            self.execute_position_correction('backward', {'count': 2})
         elif position == 'right':
-            print("[状态机] 靠近右线，向前走一步")
-            self.execute_position_correction('forward',{'count': 1})
+            print("[状态机] 机器人偏向右线，向前调整远离右线")
+            self.execute_position_correction('forward', {'count': 2})
         else:
-            print("[状态机] 位置正确，进入下一阶段")
+            print("[状态机] 位置正确，在两条黄线中间，进入下一阶段")
             self.proceed_to_next_stage()
     
     def check_rgb_position(self):
-        """检查RGB相机中的位置"""
+        """检查RGB相机中的位置 - 根据之前的运动类型决定调整方向"""
         if self.rgb_image is None:
             print("[状态机] RGB图像未就绪，等待...")
             return
         
-        position = self.yellow_line_detector.detect_position(self.rgb_image)
+        # 保存关键RGB图像用于调试
+        import cv2
+        import time
+        timestamp = int(time.time())
+        debug_image_path = f"/tmp/rgb_debug_{timestamp}.jpg"
+        cv2.imwrite(debug_image_path, self.rgb_image)
+        print(f"[状态机] 已保存RGB调试图像: {debug_image_path}")
+        
+        # 使用RGB相机检测机器人在两条黄线中间的位置
+        position = self.yellow_line_detector.detect_position(
+            self.rgb_image,
+            detection_type='ycy',  # 两条黄线中间检测
+            camera_type='rgb',
+            threshold_params={'position_threshold': 0.08, 'area_threshold': 400}
+        )
         print(f"[状态机] RGB相机检测位置: {position}")
         
         self.position_check_pending = False
         
-        if position == 'left':
-            print("[状态机] 靠近左线，向右转一步")
-            self.execute_position_correction('turn_right', {'count': 1})
-        elif position == 'right':
-            print("[状态机] 靠近右线，向左转一步")
-            self.execute_position_correction('turn_left', {'count': 1})
+        # 根据之前的运动类型和检测结果决定调整方向
+        if hasattr(self, 'movement_sequence') and self.movement_step > 0:
+            # 获取前一个运动类型
+            prev_movement = self.movement_sequence[self.movement_step - 1]
+            if isinstance(prev_movement, tuple):
+                prev_movement_type = prev_movement[0]
+            else:
+                prev_movement_type = prev_movement
+                
+            print(f"[状态机] 前一个运动类型: {prev_movement_type}")
+            
+            # RGB相机位置修正逻辑
+            if position == 'left':
+                # 机器人偏向左线，需要远离左线
+                if prev_movement_type == 'turn_right':
+                    print("[状态机] 机器人偏向左线，继续右转远离左线")
+                    self.execute_position_correction('turn_right', {'count': 1})
+                elif prev_movement_type == 'turn_left':
+                    print("[状态机] 机器人偏向左线，反向右转远离左线")
+                    self.execute_position_correction('turn_right', {'count': 1})
+                elif prev_movement_type == 'left':
+                    print("[状态机] 机器人偏向左线，向右移动远离左线")
+                    self.execute_position_correction('right', {'count': 1})
+                elif prev_movement_type == 'right':
+                    print("[状态机] 机器人偏向左线，继续右移远离左线")
+                    self.execute_position_correction('right', {'count': 1})
+                else:
+                    print("[状态机] 机器人偏向左线，默认右转调整")
+                    self.execute_position_correction('turn_right', {'count': 1})
+                    
+            elif position == 'right':
+                # 机器人偏向右线，需要远离右线
+                if prev_movement_type == 'turn_right':
+                    print("[状态机] 机器人偏向右线，反向左转远离右线")
+                    self.execute_position_correction('turn_left', {'count': 1})
+                elif prev_movement_type == 'turn_left':
+                    print("[状态机] 机器人偏向右线，继续左转远离右线")
+                    self.execute_position_correction('turn_left', {'count': 1})
+                elif prev_movement_type == 'left':
+                    print("[状态机] 机器人偏向右线，继续左移远离右线")
+                    self.execute_position_correction('left', {'count': 1})
+                elif prev_movement_type == 'right':
+                    print("[状态机] 机器人偏向右线，向左移动远离右线")
+                    self.execute_position_correction('left', {'count': 1})
+                else:
+                    print("[状态机] 机器人偏向右线，默认左转调整")
+                    self.execute_position_correction('turn_left', {'count': 1})
+            else:
+                print("[状态机] 位置正确，在两条黄线中间，进入下一阶段")
+                self.proceed_to_next_stage()
         else:
-            print("[状态机] 位置正确，进入下一阶段")
+            # 没有前一个运动信息，使用默认逻辑
+            if position == 'left':
+                print("[状态机] 机器人偏向左线，默认右转调整")
+                self.execute_position_correction('turn_right', {'count': 1})
+            elif position == 'right':
+                print("[状态机] 机器人偏向右线，默认左转调整")
+                self.execute_position_correction('turn_left', {'count': 1})
+            else:
+                print("[状态机] 位置正确，进入下一阶段")
+                self.proceed_to_next_stage()
+    
+    def check_rgb_distance(self):
+        """检查RGB相机中的距离 - 用于确认到达特定位置"""
+        if self.rgb_image is None:
+            print("[状态机] RGB图像未就绪，使用默认逻辑进入下一阶段")
             self.proceed_to_next_stage()
+            return
+        
+        # 使用距离检测功能
+        distance_result = self.yellow_line_detector.detect_position(
+            self.rgb_image,
+            detection_type='dy',  # 距离黄线位置检测
+            camera_type='rgb',
+            target_position='center',
+            threshold_params={'distance_threshold': 0.15, 'area_threshold': 400}
+        )
+        print(f"[状态机] RGB距离检测结果: {distance_result}")
+        
+        # 距离检查完成，进入下一阶段
+        print("[状态机] RGB距离检查完成，进入下一阶段")
+        self.proceed_to_next_stage()
+    
+    def check_right_fisheye_distance(self):
+        """检查右鱼眼相机距离 - 用于到达QRB点前的位置确认"""
+        if self.fisheye_image is None:
+            print("[状态机] 右鱼眼图像未就绪，使用默认逻辑进入下一阶段")
+            self.proceed_to_next_stage()
+            return
+        
+        # 使用距离检测功能
+        distance_result = self.yellow_line_detector.detect_position(
+            self.fisheye_image,
+            detection_type='dy',  # 距离黄线位置检测
+            camera_type='fisheye_right',
+            target_position='center',
+            threshold_params={'distance_threshold': 0.15, 'area_threshold': 300}
+        )
+        print(f"[状态机] 右鱼眼距离检测结果: {distance_result}")
+        
+        # 距离检查完成，进入下一阶段
+        print("[状态机] 右鱼眼距离检查完成，进入下一阶段")
+        self.proceed_to_next_stage()
+    
+    def check_left_fisheye_distance(self):
+        """检查左鱼眼相机距离 - 用于到达QRB点前的位置确认"""
+        if hasattr(self, 'left_fisheye_image') and self.left_fisheye_image is not None:
+            # 使用距离检测功能
+            distance_result = self.yellow_line_detector.detect_position(
+                self.left_fisheye_image,
+                detection_type='dy',  # 距离黄线位置检测
+                camera_type='fisheye_left',
+                target_position='center',
+                threshold_params={'distance_threshold': 0.15, 'area_threshold': 300}
+            )
+            print(f"[状态机] 左鱼眼距离检测结果: {distance_result}")
+        else:
+            print("[状态机] 左鱼眼图像未就绪，使用默认逻辑")
+        
+        # 距离检查完成，进入下一阶段
+        print("[状态机] 左鱼眼距离检查完成，进入下一阶段")
+        self.proceed_to_next_stage()
+    
+    def forward_until_red_barrier(self):
+        """前进直到检测到红色限高杆 - 启动前进并等待红色限高杆检测器触发停止"""
+        print("[状态机] 开始前进，等待红色限高杆检测器触发停止")
+        # 启动持续前进运动，等待red_barrier_callback中的停止逻辑
+        self.send_motion_command('forward', {'count': 999})  # 设置足够大的次数，等待外部停止
+    
+    def forward_until_yellow_marker(self):
+        """前进直到检测到黄色标志物 - 启动前进并等待黄色标志物检测器触发停止"""
+        print("[状态机] 开始前进，等待黄色标志物检测器触发停止")
+        # 启动持续前进运动，等待yellow_marker_callback中的停止逻辑
+        self.send_motion_command('forward', {'count': 999})  # 设置足够大的次数，等待外部停止
+    
+    def check_yellow_light_in_path(self):
+        """在运动过程中检查是否接近黄灯"""
+        if self.rgb_image is None:
+            return
+        
+        # 启用黄灯检测模式
+        self.yellow_marker_detector.set_yellow_light_mode(True)
+        
+        # 检测黄灯
+        result = self.yellow_marker_detector.detect_yellow_light(self.rgb_image)
+        
+        if result is not None:
+            distance, should_stop, status = result
+            self.yellow_light_distance = distance
+            
+            if should_stop and not self.yellow_light_stop_position_reached:
+                print(f"[状态机] 检测到黄灯，距离 {distance:.2f}m，需要停止倒计时")
+                self.yellow_light_detected = True
+                self.yellow_light_stop_position_reached = True
+                
+                # 停止当前运动
+                self.stop_motion_timer()
+                
+                # 进入黄灯停止状态
+                self.transition_to_state(State.YELLOW_LIGHT_STOP)
+    
+    def start_yellow_light_stop_sequence(self):
+        """黄灯前停止并开始倒计时"""
+        print("[状态机] 到达黄灯前停止位置，开始5秒倒计时")
+        self.current_countdown = self.countdown_seconds
+        self.transition_to_state(State.YELLOW_LIGHT_COUNTDOWN)
+    
+    def start_yellow_light_countdown_sequence(self):
+        """执行黄灯倒计时"""
+        print(f"[状态机] 黄灯倒计时: {self.current_countdown}")
+        
+        # 语音播报当前倒计时数字
+        self.publish_voice_command(str(self.current_countdown))
+        
+        if self.current_countdown > 0:
+            self.current_countdown -= 1
+            # 创建1秒定时器，继续倒计时
+            self.countdown_timer = self.create_timer(1.0, self.countdown_timer_callback)
+        else:
+            print("[状态机] 黄灯倒计时完成，继续前进")
+            # 重置黄灯检测状态
+            self.yellow_light_detected = False
+            self.yellow_light_stop_position_reached = False
+            self.yellow_marker_detector.set_yellow_light_mode(False)
+            # 继续下一个运动步骤
+            self.proceed_to_next_stage()
+    
+    def countdown_timer_callback(self):
+        """倒计时定时器回调"""
+        # 取消定时器
+        if hasattr(self, 'countdown_timer') and self.countdown_timer:
+            self.countdown_timer.cancel()
+            self.countdown_timer = None
+        
+        # 继续倒计时
+        self.start_yellow_light_countdown_sequence()
+    
+    def publish_voice_command(self, message: str):
+        """发布语音播报命令到语音节点"""
+        try:
+            # 这里应该发布到语音节点的话题
+            # 假设语音节点订阅 /voice_command 话题
+            voice_msg = String()
+            voice_msg.data = message
+            # 注意：需要在setup_communication中创建这个发布者
+            # self.voice_command_publisher.publish(voice_msg)
+            print(f"[状态机] 语音播报: {message}")
+        except Exception as e:
+            print(f"[状态机] 语音播报失败: {str(e)}")
     
     def execute_position_correction(self, movement_type, custom_params=None):
         """执行位置修正"""
@@ -531,6 +928,37 @@ class StateMachineNode(Node):
             State.IN_A2: "在A2点停止",
             State.A1_TO_S1: "从A1点运动到S1点",
             State.A2_TO_S1: "从A2点运动到S1点",
+            State.IN_S1: "在S1点",
+            State.S1_TO_S2: "从S1到S2（曲线赛道）",
+            State.IN_S2: "在S2点（绿色箭头识别）",
+            State.S2_TO_L1: "从S2到L1点",
+            State.S2_TO_R1: "从S2到R1点", 
+            State.IN_L1: "在L1点",
+            State.IN_R1: "在R1点",
+            State.L1_TO_QRB: "从L1到QRB点",
+            State.R1_TO_QRB: "从R1到QRB点",
+            State.IN_QRB: "在QRB点（二维码B识别）",
+            State.QRB_TO_B1: "从QRB到B1库位",
+            State.QRB_TO_B2: "从QRB到B2库位",
+            State.IN_B1: "在B1库位",
+            State.IN_B2: "在B2库位",
+            State.B1_TO_B2: "从B1到B2库位",
+            State.B2_TO_B1: "从B2到B1库位",
+            State.B1_TO_L1: "从B1返回L1点",
+            State.B1_TO_R1: "从B1返回R1点",
+            State.B2_TO_L1: "从B2返回L1点",
+            State.B2_TO_R1: "从B2返回R1点",
+            State.L1_TO_S2: "从L1返回S2点",
+            State.R1_TO_S2: "从R1返回S2点",
+            State.IN_S2_R: "在S2点（返程）",
+            State.S2_TO_S1: "从S2返回S1点",
+            State.IN_S1_R: "在S1点（返程）",
+            State.S1_TO_A1: "从S1返回A1点",
+            State.S1_TO_A2: "从S1返回A2点",
+            State.A1_TO_START: "从A1返回充电站",
+            State.A2_TO_START: "从A2返回充电站",
+            State.YELLOW_LIGHT_STOP: "黄灯前停止",
+            State.YELLOW_LIGHT_COUNTDOWN: "黄灯倒计时",
             State.END: "任务结束",
             State.ERROR: "错误"
         }
@@ -562,6 +990,68 @@ class StateMachineNode(Node):
             self.start_a1_to_s1_sequence()
         elif state == State.A2_TO_S1:
             self.start_a2_to_s1_sequence()
+        elif state == State.IN_S1:
+            self.start_in_s1_sequence()
+        elif state == State.S1_TO_S2:
+            self.start_s1_to_s2_sequence()
+        elif state == State.IN_S2:
+            self.start_in_s2_sequence()
+        elif state == State.S2_TO_L1:
+            self.start_s2_to_l1_sequence()
+        elif state == State.S2_TO_R1:
+            self.start_s2_to_r1_sequence()
+        elif state == State.IN_L1:
+            self.start_in_l1_sequence()
+        elif state == State.IN_R1:
+            self.start_in_r1_sequence()
+        elif state == State.L1_TO_QRB:
+            self.start_l1_to_qrb_sequence()
+        elif state == State.R1_TO_QRB:
+            self.start_r1_to_qrb_sequence()
+        elif state == State.IN_QRB:
+            self.start_qrb_detection()
+        elif state == State.QRB_TO_B1:
+            self.start_qrb_to_b1_sequence()
+        elif state == State.QRB_TO_B2:
+            self.start_qrb_to_b2_sequence()
+        elif state == State.IN_B1:
+            self.start_in_b1_sequence()
+        elif state == State.IN_B2:
+            self.start_in_b2_sequence()
+        elif state == State.B1_TO_B2:
+            self.start_b1_to_b2_sequence()
+        elif state == State.B2_TO_B1:
+            self.start_b2_to_b1_sequence()
+        elif state == State.B1_TO_L1:
+            self.start_b1_to_l1_sequence()
+        elif state == State.B1_TO_R1:
+            self.start_b1_to_r1_sequence()
+        elif state == State.B2_TO_L1:
+            self.start_b2_to_l1_sequence()
+        elif state == State.B2_TO_R1:
+            self.start_b2_to_r1_sequence()
+        elif state == State.L1_TO_S2:
+            self.start_l1_to_s2_sequence()
+        elif state == State.R1_TO_S2:
+            self.start_r1_to_s2_sequence()
+        elif state == State.IN_S2_R:
+            self.start_in_s2_r_sequence()
+        elif state == State.S2_TO_S1:
+            self.start_s2_to_s1_sequence()
+        elif state == State.IN_S1_R:
+            self.start_in_s1_r_sequence()
+        elif state == State.S1_TO_A1:
+            self.start_s1_to_a1_sequence()
+        elif state == State.S1_TO_A2:
+            self.start_s1_to_a2_sequence()
+        elif state == State.A1_TO_START:
+            self.start_a1_to_start_sequence()
+        elif state == State.A2_TO_START:
+            self.start_a2_to_start_sequence()
+        elif state == State.YELLOW_LIGHT_STOP:
+            self.start_yellow_light_stop_sequence()
+        elif state == State.YELLOW_LIGHT_COUNTDOWN:
+            self.start_yellow_light_countdown_sequence()
         elif state == State.END:
             self.on_task_completed()
         elif state == State.ERROR:
@@ -630,18 +1120,357 @@ class StateMachineNode(Node):
         self.movement_step = 0
         self.execute_next_movement()
     
-    def start_a2_to_s1_sequence(self):
-        """a2_to_s1状态：执行运动类型8,然后执行任务1,然后执行任务3,然后执行任务2,然后执行任务6"""
-        print("[状态机] 开始a2_to_s1运动序列")
+    def start_in_s1_sequence(self):
+        """in_s1状态：直接进入下一状态"""
+        print("[状态机] 在S1点，直接进入s1_to_s2状态")
+        self.transition_to_state(State.S1_TO_S2)
+    
+    def start_s1_to_s2_sequence(self):
+        """s1_to_s2状态：调用两条黄线走中间模块"""
+        print("[状态机] 开始s1_to_s2序列：调用两条黄线走中间模块")
+        # 发送开始命令给黄线走中间控制模块
+        command_msg = String()
+        command_msg.data = "START"
+        self.yellow_line_control_publisher.publish(command_msg)
+        
+        # 等待一段时间后自动进入下一状态（实际应该根据模块完成信号）
+        self.create_timer(5.0, lambda: self.transition_to_state(State.IN_S2))
+    
+    def start_in_s2_sequence(self):
+        """in_s2状态：识别RGB图片中的绿色箭头方向"""
+        print("[状态机] 在S2点，等待绿色箭头方向识别")
+        # 等待绿色箭头识别结果，在green_arrow_callback中处理状态转换
+    
+    def start_s2_to_l1_sequence(self):
+        """s2_to_l1状态：左转，检查RGB位置，前进到红色限高杆"""
+        print("[状态机] 开始s2_to_l1运动序列")
         self.movement_sequence = [
-            ('stand', None),                               # 运动类型8: 站立
-            ('forward', {'count': 9}),                    # 任务1: 向前
-            ('right', {'count': 21}),                      # 任务3: 向右
-            ('backward', {'count': 24}),                    # 任务2: 向后
-            ('turn_left', {'count': 11})                   # 任务6: 左转
+            ('left', {'count': 21}),                           # 左转21步
+            ('check_rgb_position', None),                      # 检查RGB位置
+            ('forward_until_red_barrier', None)                # 前进直到红色限高杆
         ]
         self.movement_step = 0
         self.execute_next_movement()
+    
+    def start_s2_to_r1_sequence(self):
+        """s2_to_r1状态：右转，检查RGB位置，前进到黄色标志物"""
+        print("[状态机] 开始s2_to_r1运动序列")
+        self.movement_sequence = [
+            ('right', {'count': 21}),                          # 右转21步
+            ('check_rgb_position', None),                      # 检查RGB位置
+            ('forward_until_yellow_marker', None)              # 前进直到黄色标志物
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_in_l1_sequence(self):
+        """in_l1状态：以特殊步态走10步（预留位置）"""
+        print("[状态机] 在L1点，以特殊步态走10步（预留实现）")
+        # 预留特殊步态实现位置
+        # TODO: 实现特殊步态
+        
+        # 暂时用普通前进代替特殊步态
+        self.movement_sequence = [('forward', {'count': 10})]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_in_r1_sequence(self):
+        """in_r1状态：播报倒计时5s"""
+        print("[状态机] 在R1点，开始倒计时5秒")
+        # 发送倒计时命令给语音节点
+        # TODO: 实现倒计时功能
+        
+        # 创建5秒定时器
+        self.create_timer(5.0, lambda: self.transition_to_state(State.R1_TO_QRB))
+    
+    def start_l1_to_qrb_sequence(self):
+        """l1_to_qrb状态：前进(100-x1)步，检查RGB距离，右转，检查右鱼眼距离"""
+        print("[状态机] 开始l1_to_qrb运动序列")
+        forward_steps = max(100 - self.x1_steps, 0)
+        self.movement_sequence = [
+            ('forward', {'count': forward_steps}),             # 前进(100-x1)步
+            ('check_rgb_distance', None),                      # 检查RGB距离
+            ('right', {'count': 21}),                          # 右转21步  
+            ('check_right_fisheye_distance', None)             # 检查右鱼眼距离
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_r1_to_qrb_sequence(self):
+        """r1_to_qrb状态：前进(100-y1)步，检查RGB距离，左转，检查左鱼眼距离"""
+        print("[状态机] 开始r1_to_qrb运动序列")
+        forward_steps = max(100 - self.y1_steps, 0)
+        self.movement_sequence = [
+            ('forward', {'count': forward_steps}),             # 前进(100-y1)步
+            ('check_rgb_distance', None),                      # 检查RGB距离
+            ('left', {'count': 21}),                           # 左转21步
+            ('check_left_fisheye_distance', None)              # 检查左鱼眼距离
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_qrb_to_b1_sequence(self):
+        """qrb_to_b1状态：左21,检查-rgb-ycy，前9,检查-rgb-dy"""
+        print("[状态机] 开始qrb_to_b1运动序列")
+        self.movement_sequence = [
+            ('left', {'count': 21}),                           # 左转21步
+            ('check_rgb_position', None),                      # 检查RGB位置
+            ('forward', {'count': 9}),                         # 前进9步
+            ('check_rgb_distance', None)                       # 检查RGB距离
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_qrb_to_b2_sequence(self):
+        """qrb_to_b2状态：右21,检查-rgb-ycy，前9,检查-rgb-dy"""
+        print("[状态机] 开始qrb_to_b2运动序列")
+        self.movement_sequence = [
+            ('right', {'count': 21}),                          # 右转21步
+            ('check_rgb_position', None),                      # 检查RGB位置
+            ('forward', {'count': 9}),                         # 前进9步
+            ('check_rgb_distance', None)                       # 检查RGB距离
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_in_b1_sequence(self):
+        """in_b1状态：趴下，语音交互（预留位置）"""
+        print("[状态机] 开始in_b1序列：在B1库位趴下等待交互")
+        self.movement_sequence = [
+            ('lie_down', None),                                # 趴下
+            # 语音交互预留位置
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_in_b2_sequence(self):
+        """in_b2状态：趴下，语音交互（预留位置）"""
+        print("[状态机] 开始in_b2序列：在B2库位趴下等待交互")
+        self.movement_sequence = [
+            ('lie_down', None),                                # 趴下
+            # 语音交互预留位置
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_b1_to_b2_sequence(self):
+        """b1_to_b2状态：站起，后9,检查-rgb-dy，右50,检查-右鱼眼-dy，前9,检查-rgb-dy"""
+        print("[状态机] 开始b1_to_b2运动序列")
+        self.movement_sequence = [
+            ('stand', None),                                   # 站立
+            ('backward', {'count': 9}),                        # 后退9步
+            ('check_rgb_distance', None),                      # 检查RGB距离
+            ('right', {'count': 50}),                          # 右移50步
+            ('check_right_fisheye_distance', None),            # 检查右鱼眼距离
+            ('forward', {'count': 9}),                         # 前进9步
+            ('check_rgb_distance', None)                       # 检查RGB距离
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_b2_to_b1_sequence(self):
+        """b2_to_b1状态：站起，后9,检查-rgb-dy,左50,检查-左鱼眼-dy,前9,检查-rgb-dy"""
+        print("[状态机] 开始b2_to_b1运动序列")
+        self.movement_sequence = [
+            ('stand', None),                                   # 站立
+            ('backward', {'count': 9}),                        # 后退9步
+            ('check_rgb_distance', None),                      # 检查RGB距离
+            ('left', {'count': 50}),                           # 左移50步
+            ('check_left_fisheye_distance', None),             # 检查左鱼眼距离
+            ('forward', {'count': 9}),                         # 前进9步
+            ('check_rgb_distance', None)                       # 检查RGB距离
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_b1_to_l1_sequence(self):
+        """b1_to_l1状态：右转18,检查-rgb-ycy,前进一直到rgb识别到红色限高杆，记录步数为x2"""
+        print("[状态机] 开始b1_to_l1运动序列")
+        self.movement_sequence = [
+            ('turn_right', {'count': 18}),                     # 右转18步
+            ('check_rgb_position', None),                      # 检查RGB位置
+            ('forward_until_red_barrier', None)                # 前进直到红色限高杆
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_b1_to_r1_sequence(self):
+        """b1_to_r1状态：右转18,检查-rgb-ycy,前9,检查-左鱼眼-ycy,左50,检查-左鱼眼-dy,前进一直到黄色标志物，记录步数为y2"""
+        print("[状态机] 开始b1_to_r1运动序列")
+        self.movement_sequence = [
+            ('turn_right', {'count': 18}),                     # 右转18步
+            ('check_rgb_position', None),                      # 检查RGB位置
+            ('forward', {'count': 9}),                         # 前进9步
+            ('check_fisheye_position', None),                  # 检查左鱼眼位置（这里用通用的）
+            ('left', {'count': 50}),                           # 左移50步
+            ('check_left_fisheye_distance', None),             # 检查左鱼眼距离
+            ('forward_until_yellow_marker', None)              # 前进直到黄色标志物
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_b2_to_l1_sequence(self):
+        """b2_to_l1状态：右转18,检查-rgb-ycy,前9,检查-右鱼眼-ycy,右50,检查-右鱼眼-dy,前进一直到红色限高杆，记录步数为x2"""
+        print("[状态机] 开始b2_to_l1运动序列")
+        self.movement_sequence = [
+            ('turn_right', {'count': 18}),                     # 右转18步
+            ('check_rgb_position', None),                      # 检查RGB位置
+            ('forward', {'count': 9}),                         # 前进9步
+            ('check_fisheye_position', None),                  # 检查右鱼眼位置（这里用通用的）
+            ('right', {'count': 50}),                          # 右移50步
+            ('check_right_fisheye_distance', None),            # 检查右鱼眼距离
+            ('forward_until_red_barrier', None)                # 前进直到红色限高杆
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_b2_to_r1_sequence(self):
+        """b2_to_r1状态：右转18,检查-rgb-ycy,前进一直到黄色标志物，记录步数为y2"""
+        print("[状态机] 开始b2_to_r1运动序列")
+        self.movement_sequence = [
+            ('turn_right', {'count': 18}),                     # 右转18步
+            ('check_rgb_position', None),                      # 检查RGB位置
+            ('forward_until_yellow_marker', None)              # 前进直到黄色标志物
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_l1_to_s2_sequence(self):
+        """l1_to_s2状态：前100-x2,检查-rgb-dy,右21,检查-rgb-ycy"""
+        print("[状态机] 开始l1_to_s2运动序列（返程）")
+        forward_steps = max(100 - self.x2_steps, 0)
+        self.movement_sequence = [
+            ('forward', {'count': forward_steps}),             # 前进(100-x2)步
+            ('check_rgb_distance', None),                      # 检查RGB距离
+            ('right', {'count': 21}),                          # 右转21步
+            ('check_rgb_position', None)                       # 检查RGB位置
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_r1_to_s2_sequence(self):
+        """r1_to_s2状态：前100-y2,检查-rgb-dy,左21,检查-rgb-ycy"""
+        print("[状态机] 开始r1_to_s2运动序列（返程）")
+        forward_steps = max(100 - self.y2_steps, 0)
+        self.movement_sequence = [
+            ('forward', {'count': forward_steps}),             # 前进(100-y2)步
+            ('check_rgb_distance', None),                      # 检查RGB距离
+            ('left', {'count': 21}),                           # 左转21步
+            ('check_rgb_position', None)                       # 检查RGB位置
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_in_s2_r_sequence(self):
+        """in_s2_R状态：等待一分钟"""
+        print("[状态机] 在S2点（返程），等待一分钟")
+        # 创建60秒定时器
+        self.create_timer(60.0, lambda: self.transition_to_state(State.S2_TO_S1))
+    
+    def start_s2_to_s1_sequence(self):
+        """s2_to_s1状态：调用两条黄线走中间模块（返程）"""
+        print("[状态机] 开始s2_to_s1序列：调用两条黄线走中间模块（返程）")
+        # 发送开始命令给黄线走中间控制模块
+        command_msg = String()
+        command_msg.data = "START"
+        self.yellow_line_control_publisher.publish(command_msg)
+        
+        # 等待一段时间后自动进入下一状态
+        self.create_timer(5.0, lambda: self.transition_to_state(State.IN_S1_R))
+    
+    def start_in_s1_r_sequence(self):
+        """in_s1_R状态：等待一分钟，根据初始二维码结果决定下一状态"""
+        print("[状态机] 在S1点（返程），等待一分钟")
+        print(f"[状态机] 初始二维码结果: {self.initial_qr_result}")
+        
+        # 根据初始二维码结果决定下一状态
+        if self.initial_qr_result == "A-2":
+            next_state = State.S1_TO_A1
+            print("[状态机] 初始为A-2，返程到A1")
+        elif self.initial_qr_result == "A-1":
+            next_state = State.S1_TO_A2
+            print("[状态机] 初始为A-1，返程到A2")
+        else:
+            print(f"[状态机] 未知的初始二维码结果: {self.initial_qr_result}，默认到A1")
+            next_state = State.S1_TO_A1
+        
+        # 创建60秒定时器
+        self.create_timer(60.0, lambda: self.transition_to_state(next_state))
+    
+    def start_s1_to_a1_sequence(self):
+        """s1_to_a1状态：左转9，检查-rgb-ycy,前23,检查-右鱼眼-ycy,右21,检查-右鱼眼-dy,后9,检查-rgb-dy"""
+        print("[状态机] 开始s1_to_a1运动序列（返程）")
+        self.movement_sequence = [
+            ('turn_left', {'count': 9}),                       # 左转9步
+            ('check_rgb_position', None),                      # 检查RGB位置
+            ('forward', {'count': 23}),                        # 前进23步
+            ('check_fisheye_position', None),                  # 检查右鱼眼位置
+            ('right', {'count': 21}),                          # 右移21步
+            ('check_right_fisheye_distance', None),            # 检查右鱼眼距离
+            ('backward', {'count': 9}),                        # 后退9步
+            ('check_rgb_distance', None)                       # 检查RGB距离
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_s1_to_a2_sequence(self):
+        """s1_to_a2状态：左转9，检查-rgb-ycy,前23,检查-左鱼眼-ycy,左21,检查-左鱼眼-dy,后9,检查-rgb-dy"""
+        print("[状态机] 开始s1_to_a2运动序列（返程）")
+        self.movement_sequence = [
+            ('turn_left', {'count': 9}),                       # 左转9步
+            ('check_rgb_position', None),                      # 检查RGB位置
+            ('forward', {'count': 23}),                        # 前进23步
+            ('check_fisheye_position', None),                  # 检查左鱼眼位置
+            ('left', {'count': 21}),                           # 左移21步
+            ('check_left_fisheye_distance', None),             # 检查左鱼眼距离
+            ('backward', {'count': 9}),                        # 后退9步
+            ('check_rgb_distance', None)                       # 检查RGB距离
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_a1_to_start_sequence(self):
+        """a1_to_start状态：站起，前9,检查-左鱼眼-ycy,左21,检查-右鱼眼-dy,后23,检查-右鱼眼-ycy，左转9，检查-右鱼眼-ycy，后9,检查-rgb-dy，趴下"""
+        print("[状态机] 开始a1_to_start运动序列（返回充电站）")
+        self.movement_sequence = [
+            ('stand', None),                                   # 站立
+            ('forward', {'count': 9}),                         # 前进9步
+            ('check_fisheye_position', None),                  # 检查左鱼眼位置
+            ('left', {'count': 21}),                           # 左移21步
+            ('check_right_fisheye_distance', None),            # 检查右鱼眼距离
+            ('backward', {'count': 23}),                       # 后退23步
+            ('check_fisheye_position', None),                  # 检查右鱼眼位置
+            ('turn_left', {'count': 9}),                       # 左转9步
+            ('check_fisheye_position', None),                  # 检查右鱼眼位置
+            ('backward', {'count': 9}),                        # 后退9步
+            ('check_rgb_distance', None),                      # 检查RGB距离
+            ('lie_down', None)                                 # 趴下
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_a2_to_start_sequence(self):
+        """a2_to_start状态：站起，前9,检查-右鱼眼-ycy,右21,检查-左鱼眼-dy,后23,检查-右鱼眼-ycy，左转9，检查-右鱼眼-ycy，后9,检查-rgb-dy，趴下"""
+        print("[状态机] 开始a2_to_start运动序列（返回充电站）")
+        self.movement_sequence = [
+            ('stand', None),                                   # 站立
+            ('forward', {'count': 9}),                         # 前进9步
+            ('check_fisheye_position', None),                  # 检查右鱼眼位置
+            ('right', {'count': 21}),                          # 右移21步
+            ('check_left_fisheye_distance', None),             # 检查左鱼眼距离
+            ('backward', {'count': 23}),                       # 后退23步
+            ('check_fisheye_position', None),                  # 检查右鱼眼位置
+            ('turn_left', {'count': 9}),                       # 左转9步
+            ('check_fisheye_position', None),                  # 检查右鱼眼位置
+            ('backward', {'count': 9}),                        # 后退9步
+            ('check_rgb_distance', None),                      # 检查RGB距离
+            ('lie_down', None)                                 # 趴下
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+    
+    def start_qrb_detection(self):
+        self.stop_motion_timer()
     
     def execute_next_movement(self):
         """执行下一个运动"""
@@ -682,11 +1511,65 @@ class StateMachineNode(Node):
             print("[状态机] in_a2运动序列完成，进入a2_to_s1状态")
             self.transition_to_state(State.A2_TO_S1)
         elif self.current_state == State.A1_TO_S1:
-            print("[状态机] a1_to_s1运动序列完成，进入end状态")
-            self.transition_to_state(State.END)
+            print("[状态机] a1_to_s1运动序列完成，进入in_s1状态")
+            self.transition_to_state(State.IN_S1)
         elif self.current_state == State.A2_TO_S1:
-            print("[状态机] a2_to_s1运动序列完成，进入end状态")
+            print("[状态机] a2_to_s1运动序列完成，进入in_s1状态")
+            self.transition_to_state(State.IN_S1)
+        # QRB到B区状态
+        elif self.current_state == State.QRB_TO_B1:
+            print("[状态机] qrb_to_b1运动序列完成，进入in_b1状态")
+            self.transition_to_state(State.IN_B1)
+        elif self.current_state == State.QRB_TO_B2:
+            print("[状态机] qrb_to_b2运动序列完成，进入in_b2状态")
+            self.transition_to_state(State.IN_B2)
+        elif self.current_state == State.IN_B1:
+            print("[状态机] in_b1运动序列完成，进入b1_to_b2状态")
+            self.transition_to_state(State.B1_TO_B2)
+        elif self.current_state == State.IN_B2:
+            print("[状态机] in_b2运动序列完成，进入b2_to_b1状态")
+            self.transition_to_state(State.B2_TO_B1)
+        elif self.current_state == State.B1_TO_B2:
+            print("[状态机] b1_to_b2运动序列完成，进入in_b2状态")
+            self.transition_to_state(State.IN_B2)
+        elif self.current_state == State.B2_TO_B1:
+            print("[状态机] b2_to_b1运动序列完成，进入in_b1状态")
+            self.transition_to_state(State.IN_B1)
+        # B区返程状态
+        elif self.current_state == State.B1_TO_L1:
+            print("[状态机] b1_to_l1运动序列完成，进入in_l1状态")
+            self.transition_to_state(State.IN_L1)
+        elif self.current_state == State.B1_TO_R1:
+            print("[状态机] b1_to_r1运动序列完成，进入in_r1状态")
+            self.transition_to_state(State.IN_R1)
+        elif self.current_state == State.B2_TO_L1:
+            print("[状态机] b2_to_l1运动序列完成，进入in_l1状态")
+            self.transition_to_state(State.IN_L1)
+        elif self.current_state == State.B2_TO_R1:
+            print("[状态机] b2_to_r1运动序列完成，进入in_r1状态")
+            self.transition_to_state(State.IN_R1)
+        elif self.current_state == State.L1_TO_S2:
+            print("[状态机] l1_to_s2运动序列完成，进入in_s2_r状态")
+            self.transition_to_state(State.IN_S2_R)
+        elif self.current_state == State.R1_TO_S2:
+            print("[状态机] r1_to_s2运动序列完成，进入in_s2_r状态")
+            self.transition_to_state(State.IN_S2_R)
+        # 返程到A区和充电站
+        elif self.current_state == State.S1_TO_A1:
+            print("[状态机] s1_to_a1运动序列完成，进入in_a1状态")
+            self.transition_to_state(State.IN_A1)
+        elif self.current_state == State.S1_TO_A2:
+            print("[状态机] s1_to_a2运动序列完成，进入in_a2状态")
+            self.transition_to_state(State.IN_A2)
+        elif self.current_state == State.A1_TO_START:
+            print("[状态机] a1_to_start运动序列完成，返回充电站完成")
             self.transition_to_state(State.END)
+        elif self.current_state == State.A2_TO_START:
+            print("[状态机] a2_to_start运动序列完成，返回充电站完成")
+            self.transition_to_state(State.END)
+        else:
+            print(f"[状态机] 未处理的运动序列完成状态: {self.current_state}")
+            self.transition_to_state(State.ERROR)
     
     def start_qr_detection(self):
         """开始在qr_a点进行二维码识别"""
@@ -695,8 +1578,8 @@ class StateMachineNode(Node):
         # 停止运动，准备识别
         self.stop_motion_timer()
     
-    def process_qr_result(self):
-        """处理二维码识别结果"""
+    def process_qr_a_result(self):
+        """处理A点二维码识别结果"""
         if self.qr_result == "A-1":
             print(f"[状态机] 识别到二维码: {self.qr_result}，转到qra_to_a1状态")
             self.transition_to_state(State.QRA_TO_A1)
@@ -704,7 +1587,19 @@ class StateMachineNode(Node):
             print(f"[状态机] 识别到二维码: {self.qr_result}，转到qra_to_a2状态")
             self.transition_to_state(State.QRA_TO_A2)
         else:
-            print(f"[状态机] 未知二维码: {self.qr_result}")
+            print(f"[状态机] A点未知二维码: {self.qr_result}")
+            self.transition_to_state(State.ERROR)
+    
+    def process_qr_b_result(self):
+        """处理B点二维码识别结果"""
+        if self.qrb_result == "B-1":
+            print(f"[状态机] 识别到二维码: {self.qrb_result}，转到qrb_to_b1状态")
+            self.transition_to_state(State.QRB_TO_B1)
+        elif self.qrb_result == "B-2":
+            print(f"[状态机] 识别到二维码: {self.qrb_result}，转到qrb_to_b2状态")
+            self.transition_to_state(State.QRB_TO_B2)
+        else:
+            print(f"[状态机] B点未知二维码: {self.qrb_result}")
             self.transition_to_state(State.ERROR)
     
     def on_task_completed(self):
@@ -740,6 +1635,26 @@ class StateMachineNode(Node):
                 self.position_check_pending = True
                 self.position_check_type = 'rgb'
                 self.check_rgb_position()
+                return
+            elif movement_type == 'check_rgb_distance':
+                print("[状态机] 开始RGB相机距离检查")
+                self.check_rgb_distance()
+                return
+            elif movement_type == 'check_right_fisheye_distance':
+                print("[状态机] 开始右鱼眼相机距离检查")
+                self.check_right_fisheye_distance()
+                return
+            elif movement_type == 'check_left_fisheye_distance':
+                print("[状态机] 开始左鱼眼相机距离检查")
+                self.check_left_fisheye_distance()
+                return
+            elif movement_type == 'forward_until_red_barrier':
+                print("[状态机] 开始前进直到检测到红色限高杆")
+                self.forward_until_red_barrier()
+                return
+            elif movement_type == 'forward_until_yellow_marker':
+                print("[状态机] 开始前进直到检测到黄色标志物")
+                self.forward_until_yellow_marker()
                 return
             
             # 检查是否是lie_down动作，如果是则先等待5秒

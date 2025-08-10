@@ -96,17 +96,248 @@ class YellowLineDetector:
             print(f"[黄线检测] 检测过程中出错: {str(e)}")
             return []
     
-    def detect_position(self, image: np.ndarray) -> str:
+    def detect_yellow_between_center(self, image: np.ndarray, roi_params: dict = None, 
+                                   camera_type: str = 'rgb', threshold_params: dict = None) -> str:
         """
-        检测机器人在两条黄色纵向平行线中的位置
-        适用于鱼眼相机和RGB相机，使用统一的处理方法
+        两条黄线中间检测(ycy)：输入图片，输出左，右，中
+        图片感兴趣区域，识别黄色区域，计算质心，计算位置偏移
         
         Args:
             image: 输入图像 (BGR格式)
+            roi_params: ROI区域参数，如 {'top_ratio': 0.6, 'bottom_ratio': 0.4, 'left_ratio': 0.1, 'right_ratio': 0.9}
+            camera_type: 相机类型 ('rgb', 'fisheye_left', 'fisheye_right')
+            threshold_params: 阈值参数，如 {'position_threshold': 0.05, 'area_threshold': 500}
             
         Returns:
             位置字符串: 'left' (靠近左线), 'right' (靠近右线), 'center' (在中间)
         """
+        if image is None:
+            return 'center'
+        
+        # 获取阈值参数
+        position_threshold = threshold_params.get('position_threshold', self.position_threshold) if threshold_params else self.position_threshold
+        area_threshold = threshold_params.get('area_threshold', 500) if threshold_params else 500
+        
+        try:
+            # 获取图像尺寸
+            height, width = image.shape[:2]
+            
+            # 应用ROI参数
+            if roi_params:
+                roi_top = int(height * roi_params.get('top_ratio', 1 - self.roi_bottom_ratio))
+                roi_bottom = int(height * roi_params.get('bottom_ratio', 1.0))
+                roi_left = int(width * roi_params.get('left_ratio', 0.0))
+                roi_right = int(width * roi_params.get('right_ratio', 1.0))
+                roi_image = image[roi_top:roi_bottom, roi_left:roi_right]
+                roi_width = roi_right - roi_left
+            else:
+                # 使用默认ROI区域（图像下方部分）
+                roi_start = int(height * (1 - self.roi_bottom_ratio))
+                roi_image = image[roi_start:, :]
+                roi_width = width
+            
+            print(f"[黄线检测-YCY] 处理{camera_type}相机图像，ROI区域: {roi_image.shape}")
+            print(f"[黄线检测-YCY] 使用阈值 - 位置阈值: {position_threshold}, 面积阈值: {area_threshold}")
+            
+            # 转换为HSV色彩空间并检测黄色
+            hsv = cv2.cvtColor(roi_image, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, self.lower_yellow, self.upper_yellow)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.morph_kernel)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.morph_kernel)
+            
+            # 基于轮廓的质心检测
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if contours:
+                # 找到最大的几个轮廓
+                contours = sorted(contours, key=cv2.contourArea, reverse=True)
+                
+                # 计算轮廓质心
+                centroids = []
+                for contour in contours[:5]:  # 取前5个最大轮廓
+                    if cv2.contourArea(contour) > area_threshold:  # 使用可配置的面积阈值
+                        M = cv2.moments(contour)
+                        if M["m00"] != 0:
+                            cx = int(M["m10"] / M["m00"])
+                            centroids.append(cx)
+                
+                print(f"[黄线检测-YCY] 检测到 {len(centroids)} 个轮廓质心: {centroids}")
+                
+                # 计算图像中心和阈值
+                image_center = roi_width / 2
+                threshold = roi_width * position_threshold  # 使用可配置的位置阈值
+                
+                if len(centroids) >= 2:
+                    # 两个或更多质心：找到最左和最右的质心
+                    left_centroid = min(centroids)
+                    right_centroid = max(centroids)
+                    lines_center = (left_centroid + right_centroid) / 2
+                    
+                    print(f"[黄线检测-YCY] 左质心: {left_centroid}, 右质心: {right_centroid}, 黄线中心: {lines_center}")
+                    
+                    # 判断机器人位置
+                    if image_center < lines_center - threshold:
+                        print(f"[黄线检测-YCY] 位置判断: LEFT (偏移: {lines_center - image_center:.1f})")
+                        return 'left'
+                    elif image_center > lines_center + threshold:
+                        print(f"[黄线检测-YCY] 位置判断: RIGHT (偏移: {image_center - lines_center:.1f})")
+                        return 'right'
+                    else:
+                        print(f"[黄线检测-YCY] 位置判断: CENTER (偏移: {abs(image_center - lines_center):.1f})")
+                        return 'center'
+                        
+                elif len(centroids) == 1:
+                    # 只检测到一个轮廓
+                    centroid = centroids[0]
+                    print(f"[黄线检测-YCY] 只检测到一个轮廓质心: {centroid}, 图像中心: {image_center}")
+                    
+                    if centroid < image_center:
+                        return 'left'
+                    else:
+                        return 'right'
+            
+            print("[黄线检测-YCY] 未能检测到足够的特征，默认返回center")
+            return 'center'
+            
+        except Exception as e:
+            print(f"[黄线检测-YCY] 检测出错: {str(e)}")
+            return 'center'
+    
+    def detect_distance_to_yellow(self, image: np.ndarray, target_position: str = 'center', 
+                                roi_params: dict = None, camera_type: str = 'rgb', 
+                                threshold_params: dict = None) -> str:
+        """
+        距离黄线位置检测(dy)：输入图片，输出前，后，中
+        计算与中间黄线的距离
+        
+        Args:
+            image: 输入图像 (BGR格式)
+            target_position: 目标位置 ('front', 'back', 'center')
+            roi_params: ROI区域参数
+            camera_type: 相机类型 ('rgb', 'fisheye_left', 'fisheye_right')
+            threshold_params: 阈值参数，如 {'distance_threshold': 0.15, 'area_threshold': 300}
+            
+        Returns:
+            位置字符串: 'front' (需要前进), 'back' (需要后退), 'center' (位置正确)
+        """
+        if image is None:
+            return 'center'
+        
+        # 获取阈值参数
+        distance_threshold = threshold_params.get('distance_threshold', 0.15) if threshold_params else 0.15
+        area_threshold = threshold_params.get('area_threshold', 300) if threshold_params else 300
+        
+        try:
+            # 获取图像尺寸
+            height, width = image.shape[:2]
+            
+            # 应用ROI参数，专门用于距离检测
+            if roi_params:
+                roi_top = int(height * roi_params.get('top_ratio', 0.3))
+                roi_bottom = int(height * roi_params.get('bottom_ratio', 0.7))
+                roi_left = int(width * roi_params.get('left_ratio', 0.0))
+                roi_right = int(width * roi_params.get('right_ratio', 1.0))
+                roi_image = image[roi_top:roi_bottom, roi_left:roi_right]
+                roi_height = roi_bottom - roi_top
+            else:
+                # 使用中间区域进行距离检测
+                roi_top = int(height * 0.3)
+                roi_bottom = int(height * 0.7)
+                roi_image = image[roi_top:roi_bottom, :]
+                roi_height = roi_bottom - roi_top
+            
+            print(f"[黄线检测-DY] 处理{camera_type}相机图像，目标位置: {target_position}，ROI区域: {roi_image.shape}")
+            print(f"[黄线检测-DY] 使用阈值 - 距离阈值: {distance_threshold}, 面积阈值: {area_threshold}")
+            
+            # 转换为HSV并检测黄色
+            hsv = cv2.cvtColor(roi_image, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, self.lower_yellow, self.upper_yellow)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.morph_kernel)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.morph_kernel)
+            
+            # 检测轮廓并计算质心
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if contours:
+                # 找到最大轮廓（假设为主要黄线）
+                largest_contour = max(contours, key=cv2.contourArea)
+                if cv2.contourArea(largest_contour) > area_threshold:  # 使用可配置的面积阈值
+                    M = cv2.moments(largest_contour)
+                    if M["m00"] != 0:
+                        cy = int(M["m01"] / M["m00"])  # Y坐标（垂直位置）
+                        
+                        # 计算相对于ROI中心的位置
+                        roi_center_y = roi_height / 2
+                        threshold = roi_height * distance_threshold  # 使用可配置的距离阈值
+                        
+                        print(f"[黄线检测-DY] 黄线质心Y: {cy}, ROI中心Y: {roi_center_y}, 阈值: {threshold}")
+                        
+                        # 判断距离位置
+                        if cy < roi_center_y - threshold:
+                            print("[黄线检测-DY] 黄线在前方，需要前进")
+                            return 'front'
+                        elif cy > roi_center_y + threshold:
+                            print("[黄线检测-DY] 黄线在后方，需要后退") 
+                            return 'back'
+                        else:
+                            print("[黄线检测-DY] 距离适中，位置正确")
+                            return 'center'
+            
+            print("[黄线检测-DY] 未检测到黄线，默认返回center")
+            return 'center'
+            
+        except Exception as e:
+            print(f"[黄线检测-DY] 检测出错: {str(e)}")
+            return 'center'
+    
+    def detect_position(self, image: np.ndarray, detection_type: str = 'ycy', 
+                       roi_params: dict = None, camera_type: str = 'rgb', 
+                       target_position: str = 'center', threshold_params: dict = None) -> str:
+        """
+        统一的检测接口，支持两种检测类型
+        
+        Args:
+            image: 输入图像 (BGR格式)
+            detection_type: 检测类型 ('ycy' - 两条黄线中间, 'dy' - 距离黄线位置)
+            roi_params: ROI区域参数，如 {'top_ratio': 0.6, 'bottom_ratio': 1.0, 'left_ratio': 0.0, 'right_ratio': 1.0}
+            camera_type: 相机类型 ('rgb', 'fisheye_left', 'fisheye_right')
+            target_position: 目标位置（仅用于dy类型）
+            threshold_params: 阈值参数，如 {'position_threshold': 0.05, 'area_threshold': 500, 'distance_threshold': 0.15}
+            
+        Returns:
+            位置字符串：
+            - ycy类型: 'left', 'right', 'center' 
+            - dy类型: 'front', 'back', 'center'
+        """
+        # 更新阈值参数
+        if threshold_params:
+            original_position_threshold = self.position_threshold
+            if 'position_threshold' in threshold_params:
+                self.position_threshold = threshold_params['position_threshold']
+        
+        try:
+            if detection_type == 'ycy':
+                result = self.detect_yellow_between_center(image, roi_params, camera_type, threshold_params)
+            elif detection_type == 'dy':
+                result = self.detect_distance_to_yellow(image, target_position, roi_params, camera_type, threshold_params)
+            else:
+                # 默认使用ycy类型（向后兼容）
+                result = self.detect_yellow_between_center(image, roi_params, camera_type, threshold_params)
+            
+            # 恢复原始阈值参数
+            if threshold_params and 'position_threshold' in threshold_params:
+                self.position_threshold = original_position_threshold
+                
+            return result
+            
+        except Exception as e:
+            # 恢复原始阈值参数
+            if threshold_params and 'position_threshold' in threshold_params:
+                self.position_threshold = original_position_threshold
+            print(f"[黄线检测] 统一接口检测出错: {str(e)}")
+            return 'center'
+    
+    def detect_position_legacy(self, image: np.ndarray) -> str:
         if image is None:
             return 'center'
         

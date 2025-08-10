@@ -19,16 +19,9 @@ class QRDetectorNode(Node):
         # 创建CV桥接器
         self.bridge = CvBridge()
         
-        # 二维码的实际大小（米）- 可通过参数配置
-        self.qr_real_size = self.declare_parameter('qr_real_size', 0.20).value  # 20cm
-        
-        # 相机内参（需要根据实际相机调整）- 可通过参数配置
-        self.focal_length = self.declare_parameter('focal_length', 1144.0).value  # 焦距
-        
         # 图像话题名称 - 可通过参数配置
         self.image_topic = self.declare_parameter(
             'image_topic', '/image_rgb').value
-        
         
         # 调试模式 - 可通过参数配置
         self.debug_mode = self.declare_parameter('debug_mode', True).value
@@ -66,11 +59,12 @@ class QRDetectorNode(Node):
         )
         
         self.get_logger().info('二维码检测节点已启动')
-        self.get_logger().info(f'参数配置: qr_real_size={self.qr_real_size}m, focal_length={self.focal_length}, image_topic={self.image_topic}, debug_mode={self.debug_mode}')
+        self.get_logger().info(f'参数配置: image_topic={self.image_topic}, debug_mode={self.debug_mode}')
         self.get_logger().info(f'订阅图像话题: {self.image_topic}')
         self.get_logger().info(f'发布二维码信息话题: /qr_detector/qr_info')
         self.get_logger().info(f'发布调试图像话题: /qr_detector/debug_image')
         self.get_logger().info('节点初始化完成，等待图像消息...')
+        self.get_logger().info('注意: 此版本仅发布二维码内容，不计算距离信息')
         
     def image_callback(self, msg):
         try:
@@ -113,69 +107,25 @@ class QRDetectorNode(Node):
             # 获取二维码数据
             qr_data = qr_code.data.decode('utf-8')
             
-            # 检查是否是预期的二维码类型
+            # 检查是否是预期的二维码类型（A-1/A-2/B-1/B-2）
             expected_codes = ['A-1', 'A-2', 'B-1', 'B-2']
             if qr_data in expected_codes:
-                # 计算距离
-                distance = self.calculate_distance(qr_code, image)
+                # 直接发布二维码内容，不包含距离信息
+                self.publish_qr_info(qr_data)
                 
-                # 发布二维码信息
-                self.publish_qr_info(qr_data, distance)
-                
-                self.get_logger().info(f'检测到二维码: {qr_data}, 距离: {distance:.2f}m')
+                self.get_logger().info(f'检测到二维码: {qr_data}')
             else:
-                self.get_logger().warn(f'检测到未知二维码: {qr_data}')
+                # 尝试文字识别 - 检查是否包含预期的文字内容
+                for expected_code in expected_codes:
+                    if expected_code in qr_data:
+                        # 提取匹配的文字内容
+                        self.publish_qr_info(expected_code)
+                        self.get_logger().info(f'通过文字识别检测到: {expected_code} (原始内容: {qr_data})')
+                        return
+                
+                self.get_logger().warn(f'检测到未知内容: {qr_data}')
         except Exception as e:
             self.get_logger().error(f'处理二维码时出错: {str(e)}')
-    
-    def calculate_distance(self, qr_code, image):
-        """根据二维码大小计算距离"""
-        try:
-            # 获取二维码的边界框
-            points = qr_code.polygon
-            if len(points) >= 4:
-                # 计算二维码在图像中的像素大小
-                width_pixels = self.calculate_width(points)
-                
-                # 防止除零错误
-                if width_pixels <= 0:
-                    self.get_logger().warn('二维码像素宽度为0，无法计算距离')
-                    return 0.0
-                
-                # 使用相似三角形原理计算距离
-                # distance = (real_size * focal_length) / pixel_size
-                distance = (self.qr_real_size * self.focal_length) / width_pixels
-                
-                # 添加合理性检查
-                if distance < 0.1 or distance > 10.0:  # 距离范围0.1-10米
-                    self.get_logger().warn(f'计算的距离 {distance:.2f}m 可能不准确')
-                
-                return distance
-            else:
-                self.get_logger().warn('二维码边界框点数不足，无法计算距离')
-                return 0.0
-        except Exception as e:
-            self.get_logger().error(f'计算距离时出错: {str(e)}')
-            return 0.0
-    
-    def calculate_width(self, points):
-        """计算二维码的像素宽度"""
-        try:
-            if len(points) >= 4:
-                # 计算边界框的宽度和高度
-                x_coords = [point.x for point in points]
-                y_coords = [point.y for point in points]
-                width = max(x_coords) - min(x_coords)
-                height = max(y_coords) - min(y_coords)
-                
-                # 返回较大的尺寸作为二维码的"宽度"
-                return max(width, height)
-            else:
-                self.get_logger().warn(f'边界框点数不足: {len(points)}')
-                return 0.0
-        except Exception as e:
-            self.get_logger().error(f'计算宽度时出错: {str(e)}')
-            return 0.0
     
     def get_qr_center(self, qr_code):
         """获取二维码中心点"""
@@ -194,10 +144,10 @@ class QRDetectorNode(Node):
             self.get_logger().error(f'计算中心点时出错: {str(e)}')
             return (0, 0)
     
-    def publish_qr_info(self, qr_data, distance):
-        """发布二维码信息"""
+    def publish_qr_info(self, qr_data):
+        """发布二维码信息 - 仅发布二维码内容，不包含距离"""
         info_msg = String()
-        info_msg.data = f"QR:{qr_data},Distance:{distance:.2f}"
+        info_msg.data = qr_data  # 直接发布二维码内容，格式如: "A-1", "A-2", "B-1", "B-2"
         self.qr_info_publisher.publish(info_msg)
     
 
@@ -226,10 +176,9 @@ class QRDetectorNode(Node):
                     try:
                         qr_data = qr_code.data.decode('utf-8')
                         center = self.get_qr_center(qr_code)
-                        distance = self.calculate_distance(qr_code, image)
                         
-                        # 显示二维码内容和距离
-                        text = f"{qr_data} ({distance:.2f}m)"
+                        # 显示二维码内容（不显示距离）
+                        text = f"{qr_data}"
                         cv2.putText(debug_image, text, 
                                    (int(center[0]), int(center[1]) - 10),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
