@@ -18,14 +18,45 @@
 
 import cv2
 import numpy as np
+import os
 from typing import Optional, Tuple, List
+
+
+def safe_float(value):
+    """安全的float转换，处理NumPy数组和标量"""
+    if isinstance(value, (np.ndarray, list, tuple)):
+        arr = np.array(value).flatten()
+        if arr.size == 1:
+            return float(arr[0])
+        else:
+            return float(np.mean(arr))
+    return float(value)
+
+
+def safe_compare(a, b, operator='<'):
+    """安全的数值比较，避免数组比较错误"""
+    a_val = safe_float(a)
+    b_val = safe_float(b)
+    
+    if operator == '<':
+        return a_val < b_val
+    elif operator == '>':
+        return a_val > b_val
+    elif operator == '<=':
+        return a_val <= b_val
+    elif operator == '>=':
+        return a_val >= b_val
+    elif operator == '==':
+        return a_val == b_val
+    else:
+        raise ValueError(f"Unsupported operator: {operator}")
 
 
 class YellowLineDetector:
     """黄线检测器类"""
     
     def __init__(self, 
-                 lower_yellow: Tuple[int, int, int] = (15, 80, 80),
+                 lower_yellow: Tuple[int, int, int] = (15, 50, 30),
                  upper_yellow: Tuple[int, int, int] = (35, 255, 255),
                  position_threshold: float = 0.05,
                  roi_bottom_ratio: float = 0.4):
@@ -45,56 +76,9 @@ class YellowLineDetector:
         
         # 形态学操作核
         self.morph_kernel = np.ones((3, 3), np.uint8)  # 减小核大小
-    
-    def detect_yellow_lines(self, image: np.ndarray) -> List[float]:
-        """
-        检测图像中的黄色纵向直线
         
-        Args:
-            image: 输入图像 (BGR格式)
-            
-        Returns:
-            垂直线的x坐标列表
-        """
-        if image is None:
-            return []
-        
-        try:
-            # 转换为HSV色彩空间
-            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-            
-            # 创建黄色掩码
-            mask = cv2.inRange(hsv, self.lower_yellow, self.upper_yellow)
-            
-            # 形态学操作去除噪声
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.morph_kernel)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.morph_kernel)
-            
-            # 检测边缘
-            edges = cv2.Canny(mask, 50, 150, apertureSize=3)
-            
-            # 霍夫变换检测直线
-            lines = cv2.HoughLines(edges, 1, np.pi/180, threshold=self.hough_threshold)
-            
-            vertical_lines = []
-            if lines is not None:
-                for line in lines:
-                    rho, theta = line[0]
-                    # 筛选接近垂直的直线 (角度在80-100度之间或-10到10度之间)
-                    angle = np.degrees(theta)
-                    if (80 <= angle <= 100) or (-10 <= angle <= 10):
-                        # 计算直线的x坐标
-                        if np.sin(theta) != 0:
-                            x = rho / np.sin(theta)
-                            # 确保x坐标在图像范围内
-                            if 0 <= x <= image.shape[1]:
-                                vertical_lines.append(x)
-            
-            return vertical_lines
-            
-        except Exception as e:
-            print(f"[黄线检测] 检测过程中出错: {str(e)}")
-            return []
+        # 霍夫变换阈值
+        self.hough_threshold = 50
     
     def detect_yellow_between_center(self, image: np.ndarray, roi_params: dict = None, 
                                    camera_type: str = 'rgb', threshold_params: dict = None) -> str:
@@ -144,24 +128,47 @@ class YellowLineDetector:
             mask = cv2.inRange(hsv, self.lower_yellow, self.upper_yellow)
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.morph_kernel)
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.morph_kernel)
-            
+            mask = mask.astype(np.uint8)  # 确保是 8 位单通道
+
             # 基于轮廓的质心检测
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            if contours:
-                # 找到最大的几个轮廓
-                contours = sorted(contours, key=cv2.contourArea, reverse=True)
-                
-                # 计算轮廓质心
+            contours_result = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if len(contours_result) == 3:
+                 _, contours, hierarchy = contours_result
+            else:
+                contours, hierarchy = contours_result
+
+            valid_contours = []
+            for c in contours:
+                if c is not None and len(c) > 0 and c.dtype in [np.int32, np.float32]:
+                    valid_contours.append(c)
+            print(f"[黄线检测-YCY] 检测到valid_contours {len(valid_contours)} 个轮廓")
+
+            if valid_contours:
+                contours = sorted(valid_contours, key=cv2.contourArea, reverse=True)
+                # 过滤符合面积阈值的轮廓，然后找到质心x最接近中点的轮廓
                 centroids = []
-                for contour in contours[:5]:  # 取前5个最大轮廓
-                    if cv2.contourArea(contour) > area_threshold:  # 使用可配置的面积阈值
+                for contour in contours[:5]:
+                    if cv2.contourArea(contour) > area_threshold:
                         M = cv2.moments(contour)
-                        if M["m00"] != 0:
-                            cx = int(M["m10"] / M["m00"])
+                        if safe_float(M["m00"]) != 0:
+                            cx = float(M["m10"] / M["m00"])
                             centroids.append(cx)
                 
                 print(f"[黄线检测-YCY] 检测到 {len(centroids)} 个轮廓质心: {centroids}")
+
+                # 检查所有质心是否都在一侧
+                if len(centroids) > 0:
+                    image_center = roi_width / 2
+                    left_side_count = sum(1 for c in centroids if c < image_center)
+                    right_side_count = sum(1 for c in centroids if c >= image_center)
+                    
+                    # 如果所有质心都在一侧，判定偏向该侧
+                    if left_side_count > 0 and right_side_count == 0:
+                        print(f"[黄线检测-YCY] 所有质心都在左侧({left_side_count}个)，判定偏向左侧")
+                        return 'left'
+                    elif right_side_count > 0 and left_side_count == 0:
+                        print(f"[黄线检测-YCY] 所有质心都在右侧({right_side_count}个)，判定偏向右侧")
+                        return 'right'
                 
                 # 计算图像中心和阈值
                 image_center = roi_width / 2
@@ -176,14 +183,14 @@ class YellowLineDetector:
                     print(f"[黄线检测-YCY] 左质心: {left_centroid}, 右质心: {right_centroid}, 黄线中心: {lines_center}")
                     
                     # 判断机器人位置
-                    if image_center < lines_center - threshold:
-                        print(f"[黄线检测-YCY] 位置判断: LEFT (偏移: {lines_center - image_center:.1f})")
+                    if safe_compare(image_center, lines_center - threshold, '<'):
+                        print(f"[黄线检测-YCY] 位置判断: LEFT (偏移: {safe_float(lines_center) - safe_float(image_center):.1f})")
                         return 'left'
-                    elif image_center > lines_center + threshold:
-                        print(f"[黄线检测-YCY] 位置判断: RIGHT (偏移: {image_center - lines_center:.1f})")
+                    elif safe_compare(image_center, lines_center + threshold, '>'):
+                        print(f"[黄线检测-YCY] 位置判断: RIGHT (偏移: {safe_float(image_center) - safe_float(lines_center):.1f})")
                         return 'right'
                     else:
-                        print(f"[黄线检测-YCY] 位置判断: CENTER (偏移: {abs(image_center - lines_center):.1f})")
+                        print(f"[黄线检测-YCY] 位置判断: CENTER (偏移: {abs(safe_float(image_center) - safe_float(lines_center)):.1f})")
                         return 'center'
                         
                 elif len(centroids) == 1:
@@ -191,7 +198,7 @@ class YellowLineDetector:
                     centroid = centroids[0]
                     print(f"[黄线检测-YCY] 只检测到一个轮廓质心: {centroid}, 图像中心: {image_center}")
                     
-                    if centroid < image_center:
+                    if safe_compare(centroid, image_center, '<'):
                         return 'left'
                     else:
                         return 'right'
@@ -233,8 +240,8 @@ class YellowLineDetector:
             
             # 应用ROI参数，专门用于距离检测
             if roi_params:
-                roi_top = int(height * roi_params.get('top_ratio', 0.3))
-                roi_bottom = int(height * roi_params.get('bottom_ratio', 0.7))
+                roi_top = int(height * roi_params.get('top_ratio', 0.6))
+                roi_bottom = int(height * roi_params.get('bottom_ratio', 1.0))
                 roi_left = int(width * roi_params.get('left_ratio', 0.0))
                 roi_right = int(width * roi_params.get('right_ratio', 1.0))
                 roi_image = image[roi_top:roi_bottom, roi_left:roi_right]
@@ -254,40 +261,192 @@ class YellowLineDetector:
             mask = cv2.inRange(hsv, self.lower_yellow, self.upper_yellow)
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.morph_kernel)
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.morph_kernel)
-            
+            mask = mask.astype(np.uint8)  # 确保是 8 位单通道
+
             # 检测轮廓并计算质心
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            if contours:
-                # 找到最大轮廓（假设为主要黄线）
-                largest_contour = max(contours, key=cv2.contourArea)
-                if cv2.contourArea(largest_contour) > area_threshold:  # 使用可配置的面积阈值
-                    M = cv2.moments(largest_contour)
-                    if M["m00"] != 0:
-                        cy = int(M["m01"] / M["m00"])  # Y坐标（垂直位置）
+            contours_result = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if len(contours_result) == 3:
+                 _, contours, hierarchy = contours_result
+            else:
+                contours, hierarchy = contours_result
+
+            valid_contours = []
+            for c in contours:
+                if c is not None and len(c) > 0 and c.dtype in [np.int32, np.float32]:
+                    valid_contours.append(c)
+            print(f"[黄线检测-YCY] 检测到valid_contours {len(valid_contours)} 个轮廓")
+
+            if valid_contours:
+                contours = sorted(valid_contours, key=cv2.contourArea, reverse=True)
+          
+                # 过滤符合面积阈值的轮廓，然后找到质心x最接近中点的轮廓
+                valid_contours = []
+                roi_width = roi_image.shape[1]
+                roi_center_x = roi_width / 2
+                
+                for contour in contours:
+                    if cv2.contourArea(contour) > area_threshold:
+                        M = cv2.moments(contour)
+                        if safe_float(M["m00"]) != 0:
+                            cx = float(M["m10"] / M["m00"])  # X坐标（水平位置）
+                            cy = float(M["m01"] / M["m00"])  # Y坐标（垂直位置）
+                            x_distance = abs(cx - roi_center_x)  # 到中心的距离
+                            valid_contours.append((contour, cx, cy, x_distance))
+                
+                if valid_contours:
+                    # 选择质心x最接近中点的轮廓
+                    selected_contour, cx, cy, x_distance = min(valid_contours, key=lambda x: x[3])
+                    print(f"[黄线检测-DY] 找到 {len(valid_contours)} 个有效轮廓，选择质心x最接近中点的轮廓")
+                    print(f"[黄线检测-DY] 选择的轮廓质心: X={cx}, Y={cy}, 到中心距离={x_distance}")
+                    
+                    # 使用选择的轮廓的Y坐标进行距离判断
+                    cy = cy  # 使用已计算的Y坐标
                         
-                        # 计算相对于ROI中心的位置
-                        roi_center_y = roi_height / 2
-                        threshold = roi_height * distance_threshold  # 使用可配置的距离阈值
-                        
-                        print(f"[黄线检测-DY] 黄线质心Y: {cy}, ROI中心Y: {roi_center_y}, 阈值: {threshold}")
-                        
-                        # 判断距离位置
-                        if cy < roi_center_y - threshold:
-                            print("[黄线检测-DY] 黄线在前方，需要前进")
-                            return 'front'
-                        elif cy > roi_center_y + threshold:
-                            print("[黄线检测-DY] 黄线在后方，需要后退") 
-                            return 'back'
-                        else:
-                            print("[黄线检测-DY] 距离适中，位置正确")
-                            return 'center'
+                    # 计算相对于ROI中心的位置
+                    roi_center_y = roi_height / 2
+                    threshold = roi_height * distance_threshold  # 使用可配置的距离阈值
+                    
+                    print(f"[黄线检测-DY] 黄线质心Y: {cy}, ROI中心Y: {roi_center_y}, 阈值: {threshold}")
+                    
+                    # 判断距离位置
+                    if safe_compare(cy, roi_center_y - threshold, '<'):
+                        print("[黄线检测-DY] 黄线在前方，需要前进")
+                        return 'front'
+                    elif safe_compare(cy, roi_center_y + threshold, '>'):
+                        print("[黄线检测-DY] 黄线在后方，需要后退") 
+                        return 'back'
+                    else:
+                        print("[黄线检测-DY] 距离适中，位置正确")
+                        return 'center'
             
             print("[黄线检测-DY] 未检测到黄线，默认返回center")
             return 'center'
             
         except Exception as e:
             print(f"[黄线检测-DY] 检测出错: {str(e)}")
+            return 'center'
+    
+    def detect_distance_to_yellow_walk(self, image: np.ndarray, target_position: str = 'center', 
+                                     roi_params: dict = None, camera_type: str = 'rgb', 
+                                     threshold_params: dict = None) -> str:
+        """
+        针对yellow_line_walk的距离检测：输入图片，输出前，后，中
+        1. 先判断黄色区域的最底部与底边的距离，如果超过某个阈值则返回向后
+        2. 然后判断，如果质心x距离中点的距离，超过某个阈值时，则返回向前
+        
+        Args:
+            image: 输入图像 (BGR格式)
+            target_position: 目标位置 ('front', 'back', 'center')
+            roi_params: ROI区域参数
+            camera_type: 相机类型 ('rgb', 'fisheye_left', 'fisheye_right')
+            threshold_params: 阈值参数，如 {'distance_threshold': 0.15, 'area_threshold': 300, 
+                                          'bottom_distance_threshold': 50, 'x_center_threshold': 30}
+            
+        Returns:
+            位置字符串: 'front' (需要前进), 'back' (需要后退), 'center' (位置正确)
+        """
+        if image is None:
+            return 'center'
+        
+        # 获取阈值参数
+        distance_threshold = threshold_params.get('distance_threshold', 0.15) if threshold_params else 0.15
+        area_threshold = threshold_params.get('area_threshold', 300) if threshold_params else 300
+        bottom_distance_threshold = threshold_params.get('bottom_distance_threshold', 50) if threshold_params else 50
+        x_center_threshold = threshold_params.get('x_center_threshold', 30) if threshold_params else 30
+        
+        try:
+            # 获取图像尺寸
+            height, width = image.shape[:2]
+            
+            # 应用ROI参数，专门用于距离检测
+            if roi_params:
+                roi_top = int(height * roi_params.get('top_ratio', 0.6))
+                roi_bottom = int(height * roi_params.get('bottom_ratio', 1.0))
+                roi_left = int(width * roi_params.get('left_ratio', 0.0))
+                roi_right = int(width * roi_params.get('right_ratio', 1.0))
+                roi_image = image[roi_top:roi_bottom, roi_left:roi_right]
+                roi_height = roi_bottom - roi_top
+            else:
+                # 使用中间区域进行距离检测
+                roi_top = int(height * 0.3)
+                roi_bottom = int(height * 0.7)
+                roi_image = image[roi_top:roi_bottom, :]
+                roi_height = roi_bottom - roi_top
+            
+            print(f"[黄线检测-WALK] 处理{camera_type}相机图像，目标位置: {target_position}，ROI区域: {roi_image.shape}")
+            print(f"[黄线检测-WALK] 使用阈值 - 距离阈值: {distance_threshold}, 面积阈值: {area_threshold}")
+            print(f"[黄线检测-WALK] 底部距离阈值: {bottom_distance_threshold}, X中心阈值: {x_center_threshold}")
+            
+            # 转换为HSV并检测黄色
+            hsv = cv2.cvtColor(roi_image, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, self.lower_yellow, self.upper_yellow)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.morph_kernel)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.morph_kernel)
+             
+            # 基于轮廓的质心检测
+            contours_result = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if len(contours_result) == 3:
+                 _, contours, hierarchy = contours_result
+            else:
+                contours, hierarchy = contours_result
+            print(f"[黄线检测-YCY] 检测到contours {len(contours)} 个轮廓")
+            valid_contours = []
+            for c in contours:
+                if c is not None and len(c) > 0 and c.dtype in [np.int32, np.float32]:
+                    valid_contours.append(c)
+            print(f"[黄线检测-YCY] 检测到valid_contours {len(valid_contours)} 个轮廓")
+            if valid_contours:
+                contours = sorted(valid_contours, key=cv2.contourArea, reverse=True)
+                # 过滤符合面积阈值的轮廓，然后找到质心x最接近中点的轮廓
+            
+                valid_contours = []
+                roi_width = roi_image.shape[1]
+                roi_center_x = roi_width / 2
+                
+                for contour in contours:
+                    try:
+                        # 安全计算面积
+                        area = cv2.contourArea(contour)
+                        if area > area_threshold:
+                            M = cv2.moments(contour)
+                            if safe_float(M["m00"]) != 0:
+                                cx = float(M["m10"] / M["m00"])  # X坐标（水平位置）
+                                cy = float(M["m01"] / M["m00"])  # Y坐标（垂直位置）
+                                x_distance = abs(cx - roi_center_x)  # 到中心的距离
+                                
+                                # 计算轮廓的最底部位置
+                                bottom_y = np.max(contour[:, :, 1])  # 轮廓中Y坐标的最大值
+                                valid_contours.append((contour, cx, cy, x_distance, bottom_y))
+                    except Exception as e:
+                        print(f"[黄线检测-WALK] 轮廓面积计算失败: {str(e)}")
+                        continue
+                
+                if valid_contours:
+                    # 选择质心x最接近中点的轮廓
+                    selected_contour, cx, cy, x_distance, bottom_y = min(valid_contours, key=lambda x: x[3])
+                    print(f"[黄线检测-WALK] 找到 {len(valid_contours)} 个有效轮廓，选择质心x最接近中点的轮廓")
+                    print(f"[黄线检测-WALK] 选择的轮廓质心: X={cx}, Y={cy}, 到中心距离={x_distance}")
+                    print(f"[黄线检测-WALK] 轮廓最底部Y: {bottom_y}, ROI高度: {roi_height}")
+                    
+                    # 1. 先判断黄色区域的最底部与底边的距离
+                    bottom_distance = roi_height - bottom_y  # 最底部到ROI底边的距离
+                    print(f"[黄线检测-WALK] 底部距离: {bottom_distance}, 阈值: {bottom_distance_threshold}")
+                    
+                    if bottom_distance < bottom_distance_threshold:
+                        print("[黄线检测-WALK] 黄色区域距离底边太近，需要后退")
+                        return 'back'
+                    
+                    # 2. 然后判断质心x距离中点的距离
+                    print(f"[黄线检测-WALK] 质心X距离中点: {x_distance}, 阈值: {x_center_threshold}")
+                    
+                    if x_distance > x_center_threshold:
+                        print("[黄线检测-WALK] 质心X距离中点太远，需要前进")
+                        return 'front'
+    
+            return 'center'
+            
+        except Exception as e:
+            print(f"[黄线检测-WALK] 检测出错: {str(e)}")
             return 'center'
     
     def detect_position(self, image: np.ndarray, detection_type: str = 'ycy', 
@@ -336,110 +495,7 @@ class YellowLineDetector:
                 self.position_threshold = original_position_threshold
             print(f"[黄线检测] 统一接口检测出错: {str(e)}")
             return 'center'
-    
-    def detect_position_legacy(self, image: np.ndarray) -> str:
-        if image is None:
-            return 'center'
-        
-        try:
-            # 获取图像尺寸
-            if len(image.shape) != 3:
-                print(f"[黄线检测] 错误：图像不是3通道，shape: {image.shape}")
-                return 'center'
-            
-            height, width = image.shape[:2]
-            
-            # 提取ROI区域（图像下方部分）
-            roi_start = int(height * (1 - self.roi_bottom_ratio))
-            roi_image = image[roi_start:, :]
-            
-            print(f"[黄线检测] 原图尺寸: {width}x{height}, ROI区域: {width}x{roi_image.shape[0]}")
-            
-            # 转换为HSV色彩空间
-            hsv = cv2.cvtColor(roi_image, cv2.COLOR_BGR2HSV)
-            
-            # 创建黄色掩码
-            mask = cv2.inRange(hsv, self.lower_yellow, self.upper_yellow)
-            
-            # 形态学操作去除噪声
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.morph_kernel)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.morph_kernel)
-            
-            # 基于轮廓的质心检测（统一处理方法）
-            contour_result = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            # 兼容OpenCV不同版本
-            if len(contour_result) == 3:
-                # OpenCV 3.x: (image, contours, hierarchy)
-                _, contours, _ = contour_result
-            else:
-                # OpenCV 4.x: (contours, hierarchy)
-                contours, _ = contour_result
-            
-            if contours:
-                # 找到最大的几个轮廓（假设是黄线）
-                contours = sorted(contours, key=cv2.contourArea, reverse=True)
-                
-                # 计算轮廓质心
-                centroids = []
-                for contour in contours[:5]:  # 取前5个最大轮廓
-                    if cv2.contourArea(contour) > 500:  # 面积阈值
-                        M = cv2.moments(contour)
-                        if M["m00"] != 0:
-                            cx = int(M["m10"] / M["m00"])
-                            cy = int(M["m01"] / M["m00"])
-                            centroids.append(cx)
-                
-                print(f"[黄线检测] 检测到 {len(centroids)} 个轮廓质心: {centroids}")
-                
-                # 计算图像中心
-                image_center = width / 2
-                threshold = width * self.position_threshold
-                
-                print(f"[黄线检测] 图像中心: {image_center}, 位置阈值: {self.position_threshold} ({threshold:.1f}像素)")
-                
-                if len(centroids) >= 2:
-                    # 两个或更多质心：找到最左和最右的质心
-                    left_centroid = min(centroids)
-                    right_centroid = max(centroids)
-                    
-                    # 计算黄线中心
-                    lines_center = (left_centroid + right_centroid) / 2
-                    
-                    print(f"[黄线检测] 左质心: {left_centroid}, 右质心: {right_centroid}, 黄线中心: {lines_center}")
-                    
-                    # 判断机器人位置（统一逻辑）
-                    if image_center < lines_center - threshold:
-                        print(f"[黄线检测] 位置判断: LEFT (偏移: {lines_center - image_center:.1f})")
-                        return 'left'
-                    elif image_center > lines_center + threshold:
-                        print(f"[黄线检测] 位置判断: RIGHT (偏移: {image_center - lines_center:.1f})")
-                        return 'right'
-                    else:
-                        print(f"[黄线检测] 位置判断: CENTER (偏移: {abs(image_center - lines_center):.1f})")
-                        return 'center'
-                        
-                elif len(centroids) == 1:
-                    # 只检测到一个轮廓：根据质心位置相对于图像中心判断（统一逻辑）
-                    centroid = centroids[0]
-                    
-                    print(f"[黄线检测] 只检测到一个轮廓质心: {centroid}, 图像中心: {image_center}")
-                    
-                    if centroid < image_center:
-                        print("[黄线检测] 质心在画面左侧，判定机器人偏左")
-                        return 'left'
-                    else:
-                        print("[黄线检测] 质心在画面右侧，判定机器人偏右") 
-                        return 'right'
-            
-            print("[黄线检测] 未能检测到足够的特征，默认返回center")
-            return 'center'
-            
-        except Exception as e:
-            print(f"[黄线检测] 位置检测出错: {str(e)}")
-            print(f"[黄线检测] 图像信息: shape={image.shape if image is not None else 'None'}")
-            import traceback
-            print(f"[黄线检测] 错误详情: {traceback.format_exc()}")
-            return 'center'
+
     
     def visualize_detection(self, image: np.ndarray, save_path: Optional[str] = None) -> np.ndarray:
         """
@@ -476,7 +532,11 @@ class YellowLineDetector:
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.morph_kernel)
             
             # 检测轮廓
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours_result = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if len(contours_result) == 3:
+                 _, contours, hierarchy = contours_result
+            else:
+                contours, hierarchy = contours_result
             
             if contours:
                 contours = sorted(contours, key=cv2.contourArea, reverse=True)
@@ -493,7 +553,7 @@ class YellowLineDetector:
                         
                         # 计算和绘制质心
                         M = cv2.moments(contour)
-                        if M["m00"] != 0:
+                        if safe_float(M["m00"]) != 0:
                             cx = int(M["m10"] / M["m00"])
                             cy = int(M["m01"] / M["m00"]) + roi_start
                             cv2.circle(result_image, (cx, cy), 8, (0, 0, 255), -1)
@@ -537,34 +597,7 @@ class YellowLineDetector:
             return image
 
 
-# 便捷函数
-def detect_yellow_line_position(image: np.ndarray) -> str:
-    """
-    便捷函数：检测黄线位置
-    
-    Args:
-        image: 输入图像 (BGR格式)
-        
-    Returns:
-        位置字符串: 'left', 'right', 'center'
-    """
-    detector = YellowLineDetector()
-    return detector.detect_position(image)
 
-
-def visualize_yellow_line_detection(image: np.ndarray, save_path: Optional[str] = None) -> np.ndarray:
-    """
-    便捷函数：可视化黄线检测结果
-    
-    Args:
-        image: 输入图像 (BGR格式)
-        save_path: 保存路径（可选）
-        
-    Returns:
-        带有检测结果的图像
-    """
-    detector = YellowLineDetector()
-    return detector.visualize_detection(image, save_path)
 
 
 if __name__ == "__main__":

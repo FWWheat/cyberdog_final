@@ -11,6 +11,8 @@ import numpy as np
 from cv_bridge import CvBridge
 from pyzbar import pyzbar
 import math
+import pytesseract
+import re
 
 class QRDetectorNode(Node):
     def __init__(self):
@@ -58,13 +60,30 @@ class QRDetectorNode(Node):
             qos_profile
         )
         
+        # 添加状态记忆
+        self.last_detected_qr = None
+        self.detection_confidence = 0
+        self.min_confidence = 2  # 需要连续检测3次才确认
+        self.publish_interval = 0.1  # 每0.5秒发布一次
+        
+        # 创建定时器，持续发布检测到的二维码
+        self.publish_timer = self.create_timer(
+            self.publish_interval, 
+            self.publish_timer_callback
+        )
+        
         self.get_logger().info('二维码检测节点已启动')
         self.get_logger().info(f'参数配置: image_topic={self.image_topic}, debug_mode={self.debug_mode}')
         self.get_logger().info(f'订阅图像话题: {self.image_topic}')
         self.get_logger().info(f'发布二维码信息话题: /qr_detector/qr_info')
         self.get_logger().info(f'发布调试图像话题: /qr_detector/debug_image')
+        self.get_logger().info(f'持续发布间隔: {self.publish_interval}秒')
         self.get_logger().info('节点初始化完成，等待图像消息...')
-        self.get_logger().info('注意: 此版本仅发布二维码内容，不计算距离信息')
+        
+    def publish_timer_callback(self):
+        """定时器回调，持续发布检测到的二维码信息"""
+        if self.last_detected_qr is not None:
+            self.publish_qr_info(self.last_detected_qr)
         
     def image_callback(self, msg):
         try:
@@ -78,6 +97,9 @@ class QRDetectorNode(Node):
             qr_codes = self.detect_qr_codes(cv_image)
             # self.get_logger().info(f'二维码检测完成: 检测到 {len(qr_codes)} 个二维码')
             
+            # 更新状态记忆
+            self.update_detection_state(qr_codes)
+            
             # 处理检测到的二维码
             for qr_code in qr_codes:
                 self.process_qr_code(qr_code, cv_image, msg.header)
@@ -90,17 +112,186 @@ class QRDetectorNode(Node):
             import traceback
             self.get_logger().error(f'详细错误信息: {traceback.format_exc()}')
     
+    def update_detection_state(self, qr_codes):
+        """更新检测状态记忆"""
+        if qr_codes:
+            # 获取检测到的二维码内容
+            detected_qr = None
+            for qr_code in qr_codes:
+                try:
+                    qr_data = qr_code.data.decode('utf-8')
+                    expected_codes = ['A-1', 'A-2', 'B-1', 'B-2']
+                    if qr_data in expected_codes:
+                        detected_qr = qr_data
+                        break
+                    else:
+                        # 尝试从文字中提取
+                        for expected_code in expected_codes:
+                            if expected_code in qr_data:
+                                detected_qr = expected_code
+                                break
+                        if detected_qr:
+                            break
+                except:
+                    continue
+            
+            if detected_qr:
+                if detected_qr == self.last_detected_qr:
+                    # 相同的检测结果，增加信心度
+                    self.detection_confidence = min(self.detection_confidence + 1, self.min_confidence)
+                else:
+                    # 新的检测结果，重置信心度
+                    self.last_detected_qr = detected_qr
+                    self.detection_confidence = 1
+                    self.get_logger().info(f'检测到新的二维码: {detected_qr}')
+            else:
+                # 没有有效检测结果，降低信心度但保持记忆
+                self.detection_confidence = max(self.detection_confidence - 1, 0)
+        else:
+            # 没有检测到任何二维码，降低信心度
+            self.detection_confidence = max(self.detection_confidence - 1, 0)
+            
+        # 如果信心度太低，清除记忆
+        if self.detection_confidence <= 0:
+            if self.last_detected_qr is not None:
+                self.get_logger().info(f'清除二维码记忆: {self.last_detected_qr}')
+                self.last_detected_qr = None
+    
     def detect_qr_codes(self, image):
-        """检测图像中的二维码"""
-        # 使用pyzbar检测二维码
-        # 转换为灰度图像
+        """检测图像中的二维码和文字"""
+        # 方法1: 使用pyzbar检测二维码
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # 使用pyzbar检测二维码
         qr_codes = pyzbar.decode(gray)
         
-        return qr_codes
+        # 如果pyzbar检测到二维码，直接返回
+        if qr_codes:
+            return qr_codes
+        
+        # 方法2: 使用OCR检测文字
+        ocr_results = self.detect_text_with_ocr(image)
+        
+        # 检查OCR结果是否为None
+        if ocr_results is None:
+            return []
+        
+        # OCR结果处理 - detect_text_with_ocr返回的是单个字符串或None
+        if isinstance(ocr_results, str):
+            # 创建Point类
+            class Point:
+                def __init__(self, x, y):
+                    self.x = x
+                    self.y = y
+            
+            # 创建默认的边界框（图像中心区域）
+            h, w = image.shape[:2]
+            roi_y1 = int(h * 0.1)
+            roi_y2 = int(h * 0.25)
+            roi_margin_w = int(w * 0.4)
+            roi_x1 = roi_margin_w
+            roi_x2 = w - roi_margin_w
+            
+            points = [Point(roi_x1, roi_y1), Point(roi_x2, roi_y1), 
+                     Point(roi_x2, roi_y2), Point(roi_x1, roi_y2)]
+            
+            # 创建一个类似pyzbar.Decoded对象的结构
+            class OCRResult:
+                def __init__(self, data, polygon):
+                    self.data = data.encode('utf-8')
+                    self.polygon = polygon
+                
+            return [OCRResult(ocr_results, points)]
+        
+        return []
     
+    def preprocess_for_large_text(self, image):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+        # 多种预处理方法
+        methods = {}
+        
+        # 方法1: 简单灰度
+        methods['gray'] = gray
+        
+
+        return methods
+    
+    def detect_code_in_text(self, text):
+        """从OCR文本中检测A-1/A-2/B-1/B-2"""
+        if not text:
+            return None
+        
+        text_upper = text.upper()
+        
+        # 精确匹配
+        expected_codes = ['A-1', 'A-2', 'B-1', 'B-2']
+        for code in expected_codes:
+            if code in text_upper:
+                return code
+        
+        # 模糊匹配
+        # 检查A-X模式
+        has_a_like = any(char in text_upper for char in ['A', 'Α'])
+        has_1_like = any(char in text for char in ['1'])
+        has_2_like = any(char in text for char in ['2'])
+        
+        if has_a_like:
+            if has_2_like or '2' in text:
+                return 'A-2'
+            elif has_1_like or '1' in text:
+                return 'A-1'
+        
+        # 检查B-X模式
+        has_b_like = any(char in text_upper for char in ['B', 'Β'])
+        
+        if has_b_like:
+            if has_2_like or '2' in text:
+                return 'B-2'
+            elif has_1_like or '1' in text:
+                return 'B-1'
+        
+        return None
+
+    def detect_text_with_ocr(self, image):
+        """使用OCR检测文字"""
+        # 先划定感兴趣区域(ROI) - 取图像顶部30%，中间25%部分
+        h, w = image.shape[:2]
+        
+        # 垂直方向：取顶部30%
+        roi_y1 = int(h * 0.1)
+        roi_y2 = int(h * 0.25)
+        
+        # 水平方向：取中间25%（左右各37.5%边距）
+        roi_margin_w = int(w * 0.4)  # 水平边距37.5%
+        roi_x1 = roi_margin_w
+        roi_x2 = w - roi_margin_w
+        
+        # 提取ROI区域
+        roi_image = image[roi_y1:roi_y2, roi_x1:roi_x2]
+        
+        # 获取所有预处理版本
+        processed_images = self.preprocess_for_large_text(roi_image)
+        
+        # OCR配置
+        configs = [
+            '--oem 3 --psm 6',# 单个文本块
+        ]
+        
+        # 测试所有组合
+        for process_name, processed_img in processed_images.items():
+            for config in configs:
+                try:
+                    # 使用image_to_string获取完整文本
+                    text = pytesseract.image_to_string(processed_img, config=config).strip()
+                    print(text)
+                    detected_code = self.detect_code_in_text(text)
+                    if detected_code:
+                        return detected_code
+
+                except Exception:
+                    continue
+        
+        return None
+
     def process_qr_code(self, qr_code, image, header):
         """处理检测到的二维码"""
         try:

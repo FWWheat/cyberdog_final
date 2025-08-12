@@ -2,18 +2,6 @@
 
 """
 状态机节点 - 机器人运动控制状态机
-
-功能描述：
-    - 控制机器人从起点运动到qr_a点进行二维码识别
-    - 根据识别结果运动到a1点或a2点
-    - 支持持续发布运动控制指令（类似ros2 topic pub -r 频率 -t 次数）
-    
-运动控制特性：
-    - 每种基础运动类型都有独立的频率(Hz)和次数配置
-    - 类似ROS2命令: ros2 topic pub -r <频率> -t <次数> <话题> <消息>
-    - 支持精确的时序控制，确保运动指令按预设频率和次数发送
-    - 自动管理运动序列，完成一个运动后自动进入下一个运动或状态
-
 启动方法：
     1. 构建工作空间：
        cd ~/yellow_line_ws
@@ -39,40 +27,6 @@
     5. 查看运动控制指令：
        ros2 topic echo /mi_desktop_48_b0_2d_7b_03_d0/motion_servo_cmd
 
-
-状态流程：
-    start -> start_to_qra -> in_qr_a -> qra_to_a1/qra_to_a2 -> in_a1/in_a2 -> a1_to_s1/a2_to_s1 -> end
-
-运动类型说明：
-    1. forward:    向前运动 - 5Hz频率发送15次  vel_des=[0.5, 0.0, 0.0]
-    2. backward:   向后运动 - 5Hz频率发送15次  vel_des=[-0.5, 0.0, 0.0]
-    3. right:      向右运动 - 5Hz频率发送10次  vel_des=[0.0, -0.3, 0.0]
-    4. left:       向左运动 - 5Hz频率发送10次  vel_des=[0.0, 0.3, 0.0]
-    5. turn_right: 右转90度 - 5Hz频率发送9次   vel_des=[0.0, 0.0, -1.0]
-    6. turn_left:  左转90度 - 5Hz频率发送9次   vel_des=[0.0, 0.0, 1.0]
-    7. emergency_stop: 急停 - 服务调用  motion_id=0
-    8. stand:      站立 - 服务调用  motion_id=111
-    9. lie_down:   高阻尼趴下 - 服务调用  motion_id=101
-
-MotionServoCmd接口规范：
-    - 接口名字: "motion_servo_cmd"
-    - 消息文件: protocol/msg/MotionServoCmd.msg
-    - motion_id: 303 (机器人运控姿态)
-    - cmd_type: 1 (Data帧), 2 (End帧)
-    - cmd_source: 4 (Algo算法来源)
-    - value: 0 (内八步态), 2 (垂直步态)
-    - vel_des: [x, y(≤1.5), yaw(≤2.0)] 速度约束 m/s
-    - step_height: [0.05, 0.05] 抬腿高度，默认0.05m
-    - 其他字段: rpy_des, pos_des, acc_des, ctrl_point, foot_pose 当前暂不开放
-
-示例命令：
-    ros2 topic pub -r 5 -t 15 /mi_desktop_48_b0_2d_7b_03_d0/motion_servo_cmd protocol/msg/MotionServoCmd "{ 
-        motion_id: 303, cmd_type: 1, cmd_source: 4, value: 0, 
-        vel_des: [0.0, 0.3, 0.0], rpy_des: [0.0, 0.0, 0.0], 
-        pos_des: [0.0, 0.0, 0.0], acc_des: [0.0, 0.0, 0.0], 
-        ctrl_point: [0.0, 0.0, 0.0], foot_pose: [0.0, 0.0, 0.0], 
-        step_height: [0.05, 0.05] }"
-
 """
 
 from itertools import count
@@ -80,6 +34,9 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 import time
+import subprocess
+import signal
+import os
 from enum import Enum
 # 导入ROS2消息类型
 from protocol.msg import MotionServoCmd
@@ -147,6 +104,41 @@ class StateMachineNode(Node):
     def __init__(self):
         super().__init__('state_machine_node')
         
+        # 节点管理相关
+        self.managed_nodes = {}  # 管理的节点进程字典 {node_name: process}
+        self.node_configs = {
+            'qr_detector_node': {
+                'package': 'state_machine',
+                'executable': 'qr_detector_node',
+                'required_states': [State.IN_QR_A, State.IN_QRB]
+            },
+            'green_arrow_detector': {
+                'package': 'state_machine', 
+                'executable': 'green_arrow_detector',
+                'required_states': [State.IN_S2]
+            },
+            'red_barrier_detector': {
+                'package': 'state_machine',
+                'executable': 'red_barrier_detector', 
+                'required_states': [State.S2_TO_L1, State.B1_TO_L1, State.B2_TO_L1]
+            },
+            'yellow_marker_detector': {
+                'package': 'state_machine',
+                'executable': 'yellow_marker_detector',
+                'required_states': [State.S2_TO_R1, State.B1_TO_R1, State.B2_TO_R1]
+            },
+            'voice_node': {
+                'package': 'state_machine',
+                'executable': 'voice_node',
+                'required_states': [State.IN_QR_A, State.IN_QRB, State.IN_S2, State.IN_R1]  # 根据需要动态启动
+            },
+            'yellow_line_walker': {
+                'package': 'state_machine',
+                'executable': 'yellow_line_walker',
+                'required_states': [State.S1_TO_S2, State.S2_TO_S1]
+            }
+        }
+        
         # 状态机状态
         self.current_state = State.START
         self.previous_state = State.START
@@ -192,6 +184,31 @@ class StateMachineNode(Node):
         self.movement_step = 0  # 运动步骤计数器
         self.movement_total_steps = 0  # 总步骤数
         self.movement_sequence = []  # 运动序列
+        
+        self.roi_params_ycy = {
+            'top_ratio': 0.6,
+            'bottom_ratio': 1.0,
+            'left_ratio': 0.0,
+            'right_ratio': 1.0
+        }
+
+        self.roi_params_dy = {
+            'top_ratio': 0.6,
+            'bottom_ratio': 1,
+            'left_ratio': 0.0,
+            'right_ratio': 1.0
+        }
+
+        self.threshold_params_ycy = {
+            'position_threshold': 0.08,
+            'area_threshold': 800
+        }
+
+        self.threshold_params_dy = {
+            'distance_threshold': 0.81,
+            'area_threshold': 300
+        }
+    
         
         # 基础运动类型配置 - 根据状态机超详细说明.md和MotionServoCmd接口规范
         # 接口约束: vel_des[1] y方向最大值1.5, vel_des[2] yaw最大值2.0
@@ -355,6 +372,96 @@ class StateMachineNode(Node):
         self.create_timer(0.1, self.state_machine_loop)  # 10Hz状态机循环
         
         print("[状态机] 节点已启动，等待命令...")
+        print("[状态机] 按需启动模式已启用")
+
+    def start_required_nodes(self, new_state):
+        """根据新状态启动所需的节点"""
+        for node_name, config in self.node_configs.items():
+            # 检查当前状态是否需要这个节点
+            if new_state in config['required_states']:
+                if node_name not in self.managed_nodes:
+                    self.start_node(node_name, config)
+                    
+    def stop_unused_nodes(self, new_state):
+        """停止当前状态不需要的节点"""
+        nodes_to_stop = []
+        for node_name, config in self.node_configs.items():
+            # 如果节点正在运行，但当前状态不需要它
+            if (node_name in self.managed_nodes and 
+                new_state not in config['required_states']):
+                nodes_to_stop.append(node_name)
+        
+        for node_name in nodes_to_stop:
+            self.stop_node(node_name)
+            
+    def start_node(self, node_name, config):
+        """启动一个节点"""
+        try:
+            print(f"[状态机] 启动节点: {node_name}")
+            
+            # 构建ros2 run命令
+            cmd = [
+                'ros2', 'run', 
+                config['package'], 
+                config['executable'],
+                '--ros-args', '--log-level', 'info'
+            ]
+            
+            # 设置环境变量
+            env = os.environ.copy()
+            
+            # 启动进程
+            process = subprocess.Popen(
+                cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                preexec_fn=os.setsid  # 创建新的进程组
+            )
+            
+            self.managed_nodes[node_name] = process
+            print(f"[状态机] 节点 {node_name} 启动成功 (PID: {process.pid})")
+            
+            # 等待一小段时间确保节点启动
+            time.sleep(0.5)
+            
+        except Exception as e:
+            print(f"[状态机] 启动节点 {node_name} 失败: {str(e)}")
+            
+    def stop_node(self, node_name):
+        """停止一个节点"""
+        try:
+            if node_name in self.managed_nodes:
+                process = self.managed_nodes[node_name]
+                print(f"[状态机] 停止节点: {node_name} (PID: {process.pid})")
+                
+                # 优雅关闭：发送SIGTERM
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                
+                # 等待最多3秒
+                try:
+                    process.wait(timeout=3)
+                    print(f"[状态机] 节点 {node_name} 已优雅关闭")
+                except subprocess.TimeoutExpired:
+                    # 强制关闭：发送SIGKILL
+                    print(f"[状态机] 强制关闭节点 {node_name}")
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    process.wait()
+                
+                del self.managed_nodes[node_name]
+                
+        except Exception as e:
+            print(f"[状态机] 停止节点 {node_name} 失败: {str(e)}")
+            # 即使失败也从字典中移除
+            if node_name in self.managed_nodes:
+                del self.managed_nodes[node_name]
+                
+    def cleanup_all_nodes(self):
+        """清理所有管理的节点"""
+        print("[状态机] 清理所有节点...")
+        node_names = list(self.managed_nodes.keys())
+        for node_name in node_names:
+            self.stop_node(node_name)
 
         
     def setup_communication(self):
@@ -614,7 +721,8 @@ class StateMachineNode(Node):
             self.fisheye_image, 
             detection_type='ycy',  # 两条黄线中间检测
             camera_type='fisheye_right',
-            threshold_params={'position_threshold': 0.08, 'area_threshold': 300}
+            roi_params=self.roi_params_ycy,
+            threshold_params=self.threshold_params_ycy
         )
         print(f"[状态机] 鱼眼相机检测位置: {position}")
         
@@ -649,8 +757,9 @@ class StateMachineNode(Node):
         position = self.yellow_line_detector.detect_position(
             self.rgb_image,
             detection_type='ycy',  # 两条黄线中间检测
+            roi_params=self.roi_params_ycy,
             camera_type='rgb',
-            threshold_params={'position_threshold': 0.08, 'area_threshold': 400}
+            threshold_params=self.threshold_params_ycy
         )
         print(f"[状态机] RGB相机检测位置: {position}")
         
@@ -729,9 +838,10 @@ class StateMachineNode(Node):
         distance_result = self.yellow_line_detector.detect_position(
             self.rgb_image,
             detection_type='dy',  # 距离黄线位置检测
+            roi_params=self.roi_params_dy,
             camera_type='rgb',
             target_position='center',
-            threshold_params={'distance_threshold': 0.15, 'area_threshold': 400}
+            threshold_params=self.threshold_params_dy
         )
         print(f"[状态机] RGB距离检测结果: {distance_result}")
         
@@ -751,8 +861,9 @@ class StateMachineNode(Node):
             self.fisheye_image,
             detection_type='dy',  # 距离黄线位置检测
             camera_type='fisheye_right',
+            roi_params=self.roi_params_dy,
             target_position='center',
-            threshold_params={'distance_threshold': 0.15, 'area_threshold': 300}
+            threshold_params=self.threshold_params_dy
         )
         print(f"[状态机] 右鱼眼距离检测结果: {distance_result}")
         
@@ -912,6 +1023,10 @@ class StateMachineNode(Node):
             state_msg = String()
             state_msg.data = f"State:{self.current_state.value}"
             self.state_publisher.publish(state_msg)
+            
+            # 节点管理：启动所需节点，停止不需要的节点
+            self.start_required_nodes(new_state)
+            self.stop_unused_nodes(new_state)
             
             # 执行状态进入动作
             self.on_state_entered(new_state)
@@ -1119,7 +1234,19 @@ class StateMachineNode(Node):
         ]
         self.movement_step = 0
         self.execute_next_movement()
-    
+
+    def start_a2_to_s1_sequence(self):
+        print("[状态机] 开始a2_to_s1运动序列")
+        self.movement_sequence = [
+            ('stand', None),                               # 运动类型8: 站立
+            ('forward', {'count': 9}),                    # 任务1: 向前
+            ('right', {'count': 21}),                       # 任务4: 向右
+            ('backward', {'count': 24}),                    # 任务2: 向后
+            ('turn_left', {'count': 11})                   # 任务6: 左转
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()
+
     def start_in_s1_sequence(self):
         """in_s1状态：直接进入下一状态"""
         print("[状态机] 在S1点，直接进入s1_to_s2状态")
@@ -1609,6 +1736,9 @@ class StateMachineNode(Node):
         
         # 停止运动定时器
         self.stop_motion_timer()
+        
+        # 清理所有节点
+        self.cleanup_all_nodes()
     
     def on_error_state(self):
         """错误状态处理"""
@@ -1619,6 +1749,9 @@ class StateMachineNode(Node):
         
         # 急停
         self.send_motion_command('lie_down')
+        
+        # 清理所有节点
+        self.cleanup_all_nodes()
     
     def send_motion_command(self, movement_type, custom_params=None):
         """发送运动指令 - 支持持续发布（类似ros2 topic pub -r 频率 -t 次数）和服务调用"""
@@ -1925,8 +2058,14 @@ class StateMachineNode(Node):
 
     def destroy_node(self):
         """销毁节点时清理资源"""
+        print("[状态机] 正在关闭，清理所有资源...")
+        
         # 停止运动控制定时器
         self.stop_motion_timer()
+        
+        # 清理所有管理的节点
+        self.cleanup_all_nodes()
+        
         super().destroy_node()
 
 def main(args=None):

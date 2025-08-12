@@ -140,7 +140,18 @@ class GreenArrowDetector(Node):
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
             
             # 查找轮廓
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours_result = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if len(contours_result) == 3:
+                contours, hierarchy, _ = contours_result
+            else:
+                contours, hierarchy = contours_result
+            
+            # 过滤有效轮廓
+            valid_contours = []
+            for c in contours:
+                if c is not None and len(c) > 0 and c.dtype in [np.int32, np.float32]:
+                    valid_contours.append(c)
+            contours = valid_contours
             
             if not contours:
                 return None
@@ -270,7 +281,18 @@ class GreenArrowDetector(Node):
             debug_image = cv2.addWeighted(debug_image, 0.7, green_overlay, 0.3, 0)
             
             # 查找并绘制轮廓
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours_result = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if len(contours_result) == 3:
+                contours, hierarchy, _ = contours_result
+            else:
+                contours, hierarchy = contours_result
+            
+            # 过滤有效轮廓
+            valid_contours = []
+            for c in contours:
+                if c is not None and len(c) > 0 and c.dtype in [np.int32, np.float32]:
+                    valid_contours.append(c)
+            contours = valid_contours
             if contours:
                 # 找到最大轮廓
                 largest_contour = max(contours, key=cv2.contourArea)

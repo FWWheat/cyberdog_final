@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 
 """
-两条黄线走中间控制模块 - S形路径控制
+两条黄线走中间控制模块 - S形路径控制（dy_walk检测）
 
 功能描述：
-    - 在S形路径中保持两条黄线中间行走
-    - 使用左鱼眼相机作为主要参考，右鱼眼和RGB相机作为辅助
+    - 使用左右鱼眼相机进行detect_distance_to_yellow_walk检测
+    - 根据检测结果控制机器人转向：
+      * 左鱼眼front -> 向左转前进
+      * 左鱼眼back -> 向右转前进  
+      * 右鱼眼front -> 向右转前进
+      * 右鱼眼back -> 向左转前进
+      * 决策不一致或其他情况 -> 直行前进
     - 保证机器人不出界（赛道宽83cm，机器人宽33.9cm）
     - 接收开始/结束控制命令
     
@@ -21,9 +26,8 @@
     /yellow_line_walker/status - 当前状态信息
     
 订阅话题：
-    /image_left - 左鱼眼相机图像（主要参考）
-    /image_right - 右鱼眼相机图像（辅助）
-    /image_rgb - RGB相机图像（辅助）
+    /image_left - 左鱼眼相机图像
+    /image_right - 右鱼眼相机图像
     /yellow_line_walker/command - 控制命令
 """
 
@@ -66,7 +70,6 @@ class YellowLineWalker(Node):
         # 图像存储
         self.left_fisheye_image = None
         self.right_fisheye_image = None
-        self.rgb_image = None
         
         # 控制参数
         self.forward_speed = 0.3      # 前进速度 (m/s)
@@ -82,12 +85,13 @@ class YellowLineWalker(Node):
         # ROI参数（针对不同相机）
         self.left_roi_params = {'top_ratio': 0.6, 'bottom_ratio': 1.0}
         self.right_roi_params = {'top_ratio': 0.6, 'bottom_ratio': 1.0}
-        self.rgb_roi_params = {'top_ratio': 0.7, 'bottom_ratio': 1.0}
         
         # 阈值参数
         self.detection_thresholds = {
-            'position_threshold': 0.08,  # 位置检测阈值
-            'area_threshold': 300        # 面积阈值
+            'distance_threshold': 0.15,        # 距离阈值
+            'area_threshold': 700,             # 面积阈值
+            'bottom_distance_threshold': 10,   # 底部距离阈值
+            'x_center_threshold': 80           # x中心距离阈值
         }
         
         # 配置QoS
@@ -103,9 +107,6 @@ class YellowLineWalker(Node):
         )
         self.right_image_sub = self.create_subscription(
             Image, '/image_right', self.right_image_callback, qos_profile
-        )
-        self.rgb_image_sub = self.create_subscription(
-            Image, '/image_rgb', self.rgb_image_callback, qos_profile
         )
         
         # 订阅控制命令
@@ -149,12 +150,6 @@ class YellowLineWalker(Node):
         except Exception as e:
             self.get_logger().error(f'处理右鱼眼图像时出错: {str(e)}')
     
-    def rgb_image_callback(self, msg):
-        """RGB相机图像回调"""
-        try:
-            self.rgb_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-        except Exception as e:
-            self.get_logger().error(f'处理RGB图像时出错: {str(e)}')
     
     def command_callback(self, msg):
         """控制命令回调"""
@@ -206,97 +201,105 @@ class YellowLineWalker(Node):
         """检查图像是否就绪"""
         if self.left_fisheye_image is None:
             return False
-        # 右鱼眼和RGB作为辅助，不是必需的
+        # 右鱼眼作为辅助，不是必需的
         return True
     
     def execute_line_following(self):
         """执行黄线跟随控制"""
         try:
-            # 1. 使用左鱼眼相机进行主要位置检测
-            left_position = self.yellow_detector.detect_position(
+            # 1. 使用左鱼眼相机进行dy_walk检测
+            left_position = self.yellow_detector.detect_distance_to_yellow_walk(
                 self.left_fisheye_image, 
-                detection_type='ycy',
+                target_position='center',
                 roi_params=self.left_roi_params,
                 camera_type='fisheye_left',
                 threshold_params=self.detection_thresholds
             )
             
-            # 2. 使用右鱼眼相机作为辅助参考
+            # 2. 使用右鱼眼相机进行dy_walk检测
             right_position = None
             if self.right_fisheye_image is not None:
-                right_position = self.yellow_detector.detect_position(
+                right_position = self.yellow_detector.detect_distance_to_yellow_walk(
                     self.right_fisheye_image,
-                    detection_type='ycy', 
+                    target_position='center',
                     roi_params=self.right_roi_params,
                     camera_type='fisheye_right',
                     threshold_params=self.detection_thresholds
                 )
             
-            # 3. 使用RGB相机作为辅助参考
-            rgb_position = None
-            if self.rgb_image is not None:
-                rgb_position = self.yellow_detector.detect_position(
-                    self.rgb_image,
-                    detection_type='ycy',
-                    roi_params=self.rgb_roi_params, 
-                    camera_type='rgb',
-                    threshold_params=self.detection_thresholds
-                )
+            # 3. 融合左右鱼眼的检测结果
+            final_decision = self.fuse_detection_results(left_position, right_position)
             
-            # 4. 融合多个相机的检测结果
-            final_decision = self.fuse_detection_results(left_position, right_position, rgb_position)
-            
-            # 5. 根据融合结果生成运动控制指令
+            # 4. 根据融合结果生成运动控制指令
             self.generate_motion_command(final_decision)
             
         except Exception as e:
             self.get_logger().error(f'执行黄线跟随控制时出错: {str(e)}')
     
-    def fuse_detection_results(self, left_pos: str, right_pos: str, rgb_pos: str) -> str:
+    def fuse_detection_results(self, left_pos: str, right_pos: str) -> str:
         """
-        融合多个相机的检测结果
+        融合左右鱼眼的检测结果
+        
+        决策逻辑：
+        - 左鱼眼front -> 向左转前进 (left_turn)
+        - 左鱼眼back -> 向右转前进 (right_turn)
+        - 右鱼眼front -> 向右转前进 (right_turn)
+        - 右鱼眼back -> 向左转前进 (left_turn)
+        - 决策结果不一致或其他情况 -> 不转弯前进 (forward)
         
         Args:
-            left_pos: 左鱼眼检测结果
-            right_pos: 右鱼眼检测结果  
-            rgb_pos: RGB相机检测结果
+            left_pos: 左鱼眼检测结果 ('front'/'back'/None)
+            right_pos: 右鱼眼检测结果 ('front'/'back'/None)
             
         Returns:
-            融合后的位置决策
+            融合后的运动决策 ('left_turn'/'right_turn'/'forward')
         """
-        # 以左鱼眼为主要参考
-        primary_result = left_pos
+        # 初始化决策变量
+        left_decision = None
+        right_decision = None
         
-        # 如果有辅助相机的结果，进行一致性检查
-        consistent_results = [primary_result]
+        # 根据左鱼眼结果生成决策
+        if left_pos == 'front':
+            left_decision = 'left_turn'     # 左鱼眼front -> 向左转
+        elif left_pos == 'back':
+            left_decision = 'right_turn'    # 左鱼眼back -> 向右转
+            
+        # 根据右鱼眼结果生成决策  
+        if right_pos == 'front':
+            right_decision = 'right_turn'   # 右鱼眼front -> 向右转
+        elif right_pos == 'back':
+            right_decision = 'left_turn'    # 右鱼眼back -> 向左转
         
-        if right_pos:
-            consistent_results.append(right_pos)
-        if rgb_pos:
-            consistent_results.append(rgb_pos)
+        # 融合决策
+        if left_decision is None and right_decision is None:
+            # 两个鱼眼都没有有效检测结果
+            final_decision = 'forward'
+        elif left_decision is None:
+            # 只有右鱼眼有结果
+            final_decision = right_decision
+        elif right_decision is None:
+            # 只有左鱼眼有结果
+            final_decision = left_decision
+        elif left_decision == right_decision:
+            # 两个鱼眼决策一致
+            final_decision = left_decision
+        else:
+            # 决策不一致，选择不转弯前进
+            final_decision = 'forward'
+            self.get_logger().info(f'左右鱼眼决策不一致: 左={left_pos}({left_decision}), 右={right_pos}({right_decision}), 采用直行')
         
-        # 统计各种结果的出现次数
-        result_counts = {'left': 0, 'right': 0, 'center': 0}
-        for result in consistent_results:
-            if result in result_counts:
-                result_counts[result] += 1
+        # 记录决策过程
+        if left_pos or right_pos:
+            self.get_logger().info(f'检测结果: 左鱼眼={left_pos}, 右鱼眼={right_pos} -> 最终决策={final_decision}')
         
-        # 选择出现次数最多的结果
-        final_result = max(result_counts, key=result_counts.get)
-        
-        # 如果主要参考（左鱼眼）与其他结果差异较大，优先相信左鱼眼
-        if len(consistent_results) > 1 and primary_result != final_result:
-            self.get_logger().info(f'检测结果不一致: 左鱼眼={left_pos}, 右鱼眼={right_pos}, RGB={rgb_pos}, 采用左鱼眼结果')
-            final_result = primary_result
-        
-        return final_result
+        return final_decision
     
-    def generate_motion_command(self, position_decision: str):
+    def generate_motion_command(self, motion_decision: str):
         """
-        根据位置决策生成运动控制指令
+        根据运动决策生成运动控制指令
         
         Args:
-            position_decision: 位置决策结果 ('left', 'right', 'center')
+            motion_decision: 运动决策结果 ('left_turn', 'right_turn', 'forward')
         """
         try:
             # 创建运动控制消息
@@ -312,19 +315,19 @@ class YellowLineWalker(Node):
             motion_cmd.foot_pose = [0.0, 0.0, 0.0]
             motion_cmd.step_height = [0.05, 0.05]
             
-            # 根据位置决策设置速度
-            if position_decision == 'left':
-                # 机器人偏左，需要向右调整
-                motion_cmd.vel_des = [self.forward_speed, -0.1, 0.1]  # 前进+右移+右转
+            # 根据运动决策设置速度
+            if motion_decision == 'left_turn':
+                # 向左转前进
+                motion_cmd.vel_des = [self.forward_speed, 0.0, -self.turn_speed]  # 前进+左转
                 self.current_state = WalkerState.ADJUSTING
                 
-            elif position_decision == 'right':
-                # 机器人偏右，需要向左调整  
-                motion_cmd.vel_des = [self.forward_speed, 0.1, -0.1]  # 前进+左移+左转
+            elif motion_decision == 'right_turn':
+                # 向右转前进  
+                motion_cmd.vel_des = [self.forward_speed, 0.0, self.turn_speed]  # 前进+右转
                 self.current_state = WalkerState.ADJUSTING
                 
-            else:  # center
-                # 机器人在中间，直线前进
+            else:  # forward
+                # 直线前进
                 motion_cmd.vel_des = [self.forward_speed, 0.0, 0.0]  # 直线前进
                 self.current_state = WalkerState.WALKING
             
@@ -332,8 +335,8 @@ class YellowLineWalker(Node):
             self.motion_pub.publish(motion_cmd)
             
             # 记录控制信息
-            if position_decision != 'center':
-                self.get_logger().info(f'位置调整: {position_decision} -> 速度设置: {motion_cmd.vel_des}')
+            if motion_decision != 'forward':
+                self.get_logger().info(f'运动控制: {motion_decision} -> 速度设置: {motion_cmd.vel_des}')
             
         except Exception as e:
             self.get_logger().error(f'生成运动指令时出错: {str(e)}')

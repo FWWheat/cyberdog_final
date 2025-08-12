@@ -25,6 +25,26 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
   RENAME voice_node
 )
+install(PROGRAMS
+  state_machine/green_arrow_detector.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME green_arrow_detector
+)
+install(PROGRAMS
+  state_machine/red_barrier_detector.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME red_barrier_detector
+)
+install(PROGRAMS
+  state_machine/yellow_marker_detector.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME yellow_marker_detector
+)
+install(PROGRAMS
+  state_machine/yellow_line_walker.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME yellow_line_walker
+)
 
 # Install launch files
 install(DIRECTORY launch
