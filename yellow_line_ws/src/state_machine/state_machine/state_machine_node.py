@@ -61,6 +61,27 @@
     8. 查看运动控制指令：
        ros2 topic echo /mi_desktop_48_b0_2d_7b_03_d0/motion_servo_cmd
 
+    9. 预设配置命令：
+       # 设置预设值
+       ros2 topic pub -1 /state_machine/start_command std_msgs/msg/String "data: 'PRESET_QR_A:A-1'"
+       ros2 topic pub -1 /state_machine/start_command std_msgs/msg/String "data: 'PRESET_QR_B:B-2'"
+       ros2 topic pub -1 /state_machine/start_command std_msgs/msg/String "data: 'PRESET_ARROW:left'"
+
+       # 启用/禁用预设模式
+       ros2 topic pub -1 /state_machine/start_command std_msgs/msg/String "data: 'ENABLE_PRESET'"
+       ros2 topic pub -1 /state_machine/start_command std_msgs/msg/String "data: 'DISABLE_PRESET'"
+
+       # 查看当前预设配置
+       ros2 topic pub -1 /state_machine/start_command std_msgs/msg/String "data: 'SHOW_PRESET'"
+
+       # 清除所有预设值
+       ros2 topic pub -1 /state_machine/start_command std_msgs/msg/String "data: 'CLEAR_PRESET'"
+
+预设模式说明：
+    - 启用预设模式后，机器人将跳过相应的识别过程，直接使用预设值
+    - 一旦开始执行任务，配置将被锁定，无法修改
+    - 重置状态机会解锁配置，但预设值仍保留
+
 超时处理：
     - A点二维码识别超时（20秒）：自动使用默认值 A-1
     - B点二维码识别超时（20秒）：自动使用默认值 B-1  
@@ -226,6 +247,17 @@ class StateMachineNode(Node):
         self.green_arrow_detection_timeout = 15.0  # 绿色箭头识别超时时间（秒）
         self.green_arrow_detection_start_time = None
         self.green_arrow_default_value = "right"  # 绿色箭头超时默认值
+        
+        # 预设配置功能
+        self.preset_configs = {
+            'qr_a_value': None,      # 预设A点二维码值
+            'qr_b_value': None,      # 预设B点二维码值  
+            'arrow_value': None,     # 预设绿色箭头值
+            'use_preset': False      # 是否使用预设值
+        }
+        
+        # 配置锁，防止运行时修改
+        self.config_locked = False
         
         # 语音播报相关
         self.voice_completed = False
@@ -538,6 +570,114 @@ class StateMachineNode(Node):
             print(f"[状态机] 加载配置文件失败: {str(e)}")
             print("[状态机] 使用默认参数配置")
             self.vision_config = None
+    
+    def print_preset_config(self):
+        """显示当前预设配置"""
+        print("\n=== 预设配置状态 ===")
+        print(f"预设模式: {'启用' if self.preset_configs['use_preset'] else '禁用'}")
+        print(f"A点二维码: {self.preset_configs['qr_a_value'] or '未设置'}")
+        print(f"B点二维码: {self.preset_configs['qr_b_value'] or '未设置'}")
+        print(f"绿色箭头: {self.preset_configs['arrow_value'] or '未设置'}")
+        print(f"配置锁定: {'是' if self.config_locked else '否'}")
+        print("==================\n")
+    
+    def start_qr_info_publishing(self, qr_info):
+        """开始持续发布二维码信息给语音模块"""
+        self.qr_info_to_publish = qr_info
+        print(f"[状态机] 开始持续发布二维码信息: {qr_info}")
+        
+        # 停止之前的定时器（如果存在）
+        if self.qr_info_timer is not None:
+            self.qr_info_timer.cancel()
+        
+        # 创建10Hz定时器持续发布
+        self.qr_info_timer = self.create_timer(0.1, self.publish_qr_info)
+    
+    def publish_qr_info(self):
+        """发布二维码信息到语音模块"""
+        if self.qr_info_to_publish is not None:
+            msg = String()
+            msg.data = self.qr_info_to_publish
+            self.qr_info_publisher.publish(msg)
+            # print(f"[状态机] 发布二维码信息: {self.qr_info_to_publish}")
+    
+    def stop_qr_info_publishing(self):
+        """停止发布二维码信息"""
+        if self.qr_info_timer is not None:
+            self.qr_info_timer.cancel()
+            self.qr_info_timer = None
+            print("[状态机] 停止发布二维码信息")
+        self.qr_info_to_publish = None
+    
+    def start_r1_countdown_publishing(self):
+        """开始持续发布R1倒计时触发信号给语音模块"""
+        self.r1_countdown_to_publish = "R1_COUNTDOWN_START"
+        print(f"[状态机] 开始持续发布R1倒计时触发信号: {self.r1_countdown_to_publish}")
+        
+        # 停止之前的定时器（如果存在）
+        if hasattr(self, 'r1_countdown_timer') and self.r1_countdown_timer is not None:
+            self.r1_countdown_timer.cancel()
+        
+        # 创建10Hz定时器持续发布
+        self.r1_countdown_timer = self.create_timer(0.1, self.publish_r1_countdown)
+    
+    def publish_r1_countdown(self):
+        """发布R1倒计时触发信号到语音模块"""
+        if hasattr(self, 'r1_countdown_to_publish') and self.r1_countdown_to_publish is not None:
+            trigger_msg = String()
+            trigger_msg.data = self.r1_countdown_to_publish
+            # 使用已有的voice_trigger_publisher发布
+            if hasattr(self, 'voice_trigger_publisher'):
+                self.voice_trigger_publisher.publish(trigger_msg)
+                # print(f"[状态机] 发布R1倒计时触发信号: {self.r1_countdown_to_publish}")
+    
+    def stop_r1_countdown_publishing(self):
+        """停止发布R1倒计时触发信号"""
+        if hasattr(self, 'r1_countdown_timer') and self.r1_countdown_timer is not None:
+            self.r1_countdown_timer.cancel()
+            self.r1_countdown_timer = None
+            print("[状态机] 停止发布R1倒计时触发信号")
+        if hasattr(self, 'r1_countdown_to_publish'):
+            self.r1_countdown_to_publish = None
+    
+    def start_s2_arrow_publishing(self):
+        """开始持续发布S2绿色箭头识别状态信息给语音模块"""
+        self.s2_arrow_to_publish = "S2_ARROW_DETECTING"
+        print(f"[状态机] 开始持续发布S2绿色箭头识别状态信息: {self.s2_arrow_to_publish}")
+        
+        # 停止之前的定时器（如果存在）
+        if hasattr(self, 's2_arrow_timer') and self.s2_arrow_timer is not None:
+            self.s2_arrow_timer.cancel()
+        
+        # 创建10Hz定时器持续发布
+        self.s2_arrow_timer = self.create_timer(0.1, self.publish_s2_arrow)
+    
+    def publish_s2_arrow(self):
+        """发布S2绿色箭头识别状态信息到语音模块"""
+        if hasattr(self, 's2_arrow_to_publish') and self.s2_arrow_to_publish is not None:
+            # 根据当前识别状态发送不同信息
+            if self.green_arrow_result is not None:
+                # 已识别到结果
+                msg_data = f"S2_ARROW_DETECTED:{self.green_arrow_result}"
+            else:
+                # 仍在识别中
+                msg_data = self.s2_arrow_to_publish
+            
+            trigger_msg = String()
+            trigger_msg.data = msg_data
+            # 使用已有的voice_trigger_publisher发布
+            if hasattr(self, 'voice_trigger_publisher'):
+                self.voice_trigger_publisher.publish(trigger_msg)
+                # print(f"[状态机] 发布S2绿色箭头状态信息: {msg_data}")
+    
+    def stop_s2_arrow_publishing(self):
+        """停止发布S2绿色箭头识别状态信息"""
+        if hasattr(self, 's2_arrow_timer') and self.s2_arrow_timer is not None:
+            self.s2_arrow_timer.cancel()
+            self.s2_arrow_timer = None
+            print("[状态机] 停止发布S2绿色箭头识别状态信息")
+        if hasattr(self, 's2_arrow_to_publish'):
+            self.s2_arrow_to_publish = None
     
     def get_check_params(self, config_name, detection_type):
         """
@@ -1322,6 +1462,17 @@ class StateMachineNode(Node):
             10
         )
         
+        # 二维码信息发布者 - 用于向语音模块发送二维码信息
+        self.qr_info_publisher = self.create_publisher(
+            String,
+            '/voice_node/qr_info',
+            10
+        )
+        
+        # 语音播报状态管理
+        self.qr_info_timer = None  # 持续发布二维码信息的定时器
+        self.qr_info_to_publish = None  # 待发布的二维码信息
+        
         # 启动相机健康监控定时器
         self.camera_health_timer = self.create_timer(10.0, self.camera_health_monitor)
         
@@ -1340,6 +1491,13 @@ class StateMachineNode(Node):
         10. SET_QR_B_DEFAULT:<value> - 设置B点二维码超时默认值
         11. SET_ARROW_DEFAULT:<value> - 设置绿色箭头超时默认值
         12. EXIT_B_ZONE - 强制退出B区循环，进入返程状态（根据绿色箭头方向相反方向返程）
+        13. PRESET_QR_A:<value> - 设置A点二维码预设值（A-1或A-2）
+        14. PRESET_QR_B:<value> - 设置B点二维码预设值（B-1或B-2）
+        15. PRESET_ARROW:<value> - 设置绿色箭头预设值（left或right）
+        16. ENABLE_PRESET - 启用预设模式
+        17. DISABLE_PRESET - 禁用预设模式
+        18. SHOW_PRESET - 显示当前预设配置
+        19. CLEAR_PRESET - 清除所有预设值
         
         示例：
         - START:IN_QR_A 或 START:2 - 直接进入二维码A识别状态
@@ -1347,6 +1505,8 @@ class StateMachineNode(Node):
         - SET_ARROW:right - 手动设置绿色箭头方向为right
         - SET_QR_A_DEFAULT:A-2 - 设置A点二维码超时默认值为A-2
         - EXIT_B_ZONE - 强制退出B区任务，根据绿色箭头相反方向开始返程
+        - PRESET_QR_A:A-1 - 设置A点二维码预设值为A-1
+        - ENABLE_PRESET - 启用预设模式，机器人将使用预设值跳过识别
         """
         command_parts = msg.data.strip().split(':', 1)
         command = command_parts[0]
@@ -1490,6 +1650,79 @@ class StateMachineNode(Node):
             # 停止运动定时器
             self.stop_motion_timer()
             self.transition_to_state(State.START)
+            
+        elif command == "PRESET_QR_A":
+            if len(command_parts) == 2:
+                if self.config_locked:
+                    print("[状态机] 配置已锁定，无法修改预设值")
+                    return
+                qr_value = command_parts[1]
+                if qr_value in ["A-1", "A-2"]:
+                    self.preset_configs['qr_a_value'] = qr_value
+                    print(f"[状态机] 预设A点二维码值: {qr_value}")
+                else:
+                    print(f"[状态机] 无效的A点二维码值: {qr_value}，支持: A-1, A-2")
+            else:
+                print("[状态机] PRESET_QR_A命令格式错误，应为: PRESET_QR_A:<value>")
+
+        elif command == "PRESET_QR_B":
+            if len(command_parts) == 2:
+                if self.config_locked:
+                    print("[状态机] 配置已锁定，无法修改预设值")
+                    return
+                qr_value = command_parts[1]
+                if qr_value in ["B-1", "B-2"]:
+                    self.preset_configs['qr_b_value'] = qr_value
+                    print(f"[状态机] 预设B点二维码值: {qr_value}")
+                else:
+                    print(f"[状态机] 无效的B点二维码值: {qr_value}，支持: B-1, B-2")
+            else:
+                print("[状态机] PRESET_QR_B命令格式错误，应为: PRESET_QR_B:<value>")
+
+        elif command == "PRESET_ARROW":
+            if len(command_parts) == 2:
+                if self.config_locked:
+                    print("[状态机] 配置已锁定，无法修改预设值")
+                    return
+                arrow_value = command_parts[1]
+                if arrow_value in ["left", "right"]:
+                    self.preset_configs['arrow_value'] = arrow_value
+                    print(f"[状态机] 预设绿色箭头值: {arrow_value}")
+                else:
+                    print(f"[状态机] 无效的绿色箭头值: {arrow_value}，支持: left, right")
+            else:
+                print("[状态机] PRESET_ARROW命令格式错误，应为: PRESET_ARROW:<value>")
+
+        elif command == "ENABLE_PRESET":
+            if self.config_locked:
+                print("[状态机] 配置已锁定，无法修改预设模式")
+                return
+            self.preset_configs['use_preset'] = True
+            print("[状态机] 已启用预设模式")
+            self.print_preset_config()
+
+        elif command == "DISABLE_PRESET":
+            if self.config_locked:
+                print("[状态机] 配置已锁定，无法修改预设模式")
+                return
+            self.preset_configs['use_preset'] = False
+            print("[状态机] 已禁用预设模式")
+
+        elif command == "SHOW_PRESET":
+            self.print_preset_config()
+
+        elif command == "CLEAR_PRESET":
+            if self.config_locked:
+                print("[状态机] 配置已锁定，无法清除预设值")
+                return
+            self.preset_configs = {
+                'qr_a_value': None,
+                'qr_b_value': None,
+                'arrow_value': None,
+                'use_preset': False
+            }
+            print("[状态机] 已清除所有预设值")
+            
         elif command == "RESET":
             print("[状态机] 收到重置命令")
             self.reset_state_machine()
@@ -1541,30 +1774,39 @@ class StateMachineNode(Node):
             if self.current_state == State.IN_QR_A and self.qr_result is None:
                 self.qr_result = qr_code
                 self.initial_qr_result = qr_code  # 保存初始二维码结果
-                print(f"[状态机] A点二维码识别完成: {qr_code}，等待语音播报完成信号")
+                print(f"[状态机] A点二维码识别完成: {qr_code}，开始持续发布给语音模块")
                 
-                # 设置等待语音播报标志
+                # 停止二维码识别节点
+                if 'qr_detector_node' in self.managed_nodes:
+                    self.stop_node('qr_detector_node')
+                
+                # 开始持续发布二维码信息给语音模块
+                self.start_qr_info_publishing(qr_code)
+                
+                # 设置等待语音播报完成标志
                 self.waiting_for_voice = True
                 self.voice_start_time = time.time()
-                self.pending_qr_node_stop = True
                 
-                # 启动语音播报超时定时器（10秒） - 使用状态绑定定时器
-                self.voice_complete_timer = self.create_state_timer('voice_timeout', 10.0, self._voice_timeout_callback, State.IN_QR_A)
+                # 启动语音播报超时定时器（30秒，给语音播报足够时间） - 使用状态绑定定时器
+                self.voice_complete_timer = self.create_state_timer('voice_timeout', 30.0, self._voice_timeout_callback, State.IN_QR_A)
                 
-                self.process_qr_a_result()
             elif self.current_state == State.IN_QRB and self.qrb_result is None:
                 self.qrb_result = qr_code
-                print(f"[状态机] B点二维码识别完成: {qr_code}，等待语音播报完成信号")
+                print(f"[状态机] B点二维码识别完成: {qr_code}，开始持续发布给语音模块")
                 
-                # 设置等待语音播报标志
+                # 停止二维码识别节点
+                if 'qr_detector_node' in self.managed_nodes:
+                    self.stop_node('qr_detector_node')
+                
+                # 开始持续发布二维码信息给语音模块
+                self.start_qr_info_publishing(qr_code)
+                
+                # 设置等待语音播报完成标志
                 self.waiting_for_voice = True
                 self.voice_start_time = time.time()
-                self.pending_qr_node_stop = True
                 
-                # 启动语音播报超时定时器（10秒） - 使用状态绑定定时器
-                self.voice_complete_timer = self.create_state_timer('voice_timeout', 10.0, self._voice_timeout_callback, State.IN_QRB)
-                
-                self.process_qr_b_result()
+                # 启动语音播报超时定时器（30秒，给语音播报足够时间） - 使用状态绑定定时器
+                self.voice_complete_timer = self.create_state_timer('voice_timeout', 30.0, self._voice_timeout_callback, State.IN_QRB)
             else:
                 # 处理重复识别结果或无效状态的二维码识别
                 if self.current_state == State.IN_QR_A and self.qr_result is not None:
@@ -1624,12 +1866,18 @@ class StateMachineNode(Node):
         # 语音定时器会通过状态转换自动清理，不需要手动取消
         self.voice_complete_timer = None
         
-        # 如果有待停止的二维码节点，现在停止它
-        if self.pending_qr_node_stop:
-            if 'qr_detector_node' in self.managed_nodes:
-                print("[状态机] 关闭二维码识别节点")
-                self.stop_node('qr_detector_node')
-            self.pending_qr_node_stop = False
+        # 停止发布二维码信息
+        self.stop_qr_info_publishing()
+        
+        # 根据当前状态进行状态转换
+        if self.current_state == State.IN_QR_A:
+            print("[状态机] A点语音播报完成，处理二维码结果")
+            self.process_qr_a_result()
+        elif self.current_state == State.IN_QRB:
+            print("[状态机] B点语音播报完成，处理二维码结果")
+            self.process_qr_b_result()
+        else:
+            print(f"[状态机] 在状态{self.current_state.name}处理语音完成，但无具体处理逻辑")
     
     def _handle_voice_complete_arrow(self):
         """处理绿色箭头语音播报完成（无论是正常完成还是超时）"""
@@ -1639,6 +1887,9 @@ class StateMachineNode(Node):
         
         # 语音定时器会通过状态转换自动清理，不需要手动取消
         self.voice_complete_timer = None
+        
+        # 停止发布S2绿色箭头识别状态信息
+        self.stop_s2_arrow_publishing()
         
         # 关闭绿色箭头识别节点
         if 'green_arrow_detector' in self.managed_nodes:
@@ -2657,7 +2908,7 @@ class StateMachineNode(Node):
             ('forward', {'count': 12}),                    # 运动类型1: 向前
             ('check_right_fisheye_ycy_position', 'start_to_qra_fisheye_ycy'),
             ('turn_right', {'count': 11}),                 # 运动类型5: 右转
-            ('check_right_fisheye_ycy_position', 'start_to_qra_fisheye_ycy'),
+            # ('check_right_fisheye_ycy_position', 'start_to_qra_fisheye_ycy'),
 
         ]
         self.movement_step = 0
@@ -2788,8 +3039,23 @@ class StateMachineNode(Node):
         self.create_state_timer('s1_to_s2_complete', 5.0, goto_s2, State.S1_TO_S2)
     
     def start_in_s2_sequence(self):
-        """in_s2状态：识别RGB图片中的绿色箭头方向"""
-        print("[状态机] 在S2点，等待绿色箭头方向识别")
+        """in_s2状态：10Hz定时发送绿色箭头识别状态信息，如果启用预设则直接使用预设值"""
+        print("[状态机] 在S2点")
+        
+        # 检查是否使用预设值
+        if self.preset_configs['use_preset'] and self.preset_configs['arrow_value']:
+            print(f"[状态机] 使用预设绿色箭头值: {self.preset_configs['arrow_value']}")
+            self.green_arrow_result = self.preset_configs['arrow_value']
+            # 直接处理结果，不启动识别
+            self._process_green_arrow_result(self.preset_configs['arrow_value'])
+            return
+        
+        # 原有的识别逻辑 + 10Hz定时发送
+        print("[状态机] 开始10Hz定时发送绿色箭头识别状态信息，等待绿色箭头方向识别")
+        
+        # 开始10Hz定时发布绿色箭头识别状态信息
+        self.start_s2_arrow_publishing()
+        
         # 记录绿色箭头识别开始时间
         self.green_arrow_detection_start_time = time.time()
         # 等待绿色箭头识别结果，在green_arrow_callback中处理状态转换
@@ -2844,11 +3110,11 @@ class StateMachineNode(Node):
         self.execute_next_movement()
     
     def start_in_r1_sequence(self):
-        """in_r1状态：发布信息触发voice_node开始倒计时，等待voice_node的完成信号，根据前一状态决定下一状态"""
-        print(f"[状态机] 在R1点，发布倒计时触发信号 (前一状态: {self.previous_state.name})")
+        """in_r1状态：10Hz定时发布倒计时触发信号给voice_node，等待voice_node的完成信号，根据前一状态决定下一状态"""
+        print(f"[状态机] 在R1点，开始10Hz定时发布倒计时触发信号 (前一状态: {self.previous_state.name})")
         
-        # 发布信息触发voice_node开始倒计时
-        self.publish_r1_countdown_trigger()
+        # 开始10Hz定时发布倒计时触发信号
+        self.start_r1_countdown_publishing()
         
         # 设置等待voice_node完成信号的状态
         self.waiting_for_voice = True
@@ -2878,6 +3144,9 @@ class StateMachineNode(Node):
     def _handle_r1_voice_complete(self):
         """处理R1状态语音播报完成"""
         print("[状态机] 处理R1状态语音播报完成")
+        
+        # 停止发布R1倒计时触发信号
+        self.stop_r1_countdown_publishing()
         
         # 关闭黄色标志物识别节点
         if 'yellow_marker_detector' in self.managed_nodes:
@@ -3231,8 +3500,27 @@ class StateMachineNode(Node):
         self.execute_next_movement()
     
     def start_qrb_detection(self):
-        """开始在qrb点进行二维码识别"""
-        print("[状态机] 到达二维码B点，开始二维码识别")
+        """开始在qrb点进行二维码识别，如果启用预设则直接使用预设值"""
+        print("[状态机] 到达二维码B点")
+        
+        # 检查是否使用预设值
+        if self.preset_configs['use_preset'] and self.preset_configs['qr_b_value']:
+            print(f"[状态机] 使用预设B点二维码值: {self.preset_configs['qr_b_value']}")
+            self.qrb_result = self.preset_configs['qr_b_value']
+            
+            # 开始持续发布二维码信息给语音模块
+            self.start_qr_info_publishing(self.preset_configs['qr_b_value'])
+            
+            # 设置等待语音播报完成标志
+            self.waiting_for_voice = True
+            self.voice_start_time = time.time()
+            
+            # 启动语音播报超时定时器（30秒，给语音播报足够时间） - 使用状态绑定定时器
+            self.voice_complete_timer = self.create_state_timer('voice_timeout', 30.0, self._voice_timeout_callback, State.IN_QRB)
+            return
+        
+        # 原有的识别逻辑
+        print("[状态机] 开始二维码识别")
         self.qr_detection_start_time = time.time()
         # 停止运动，准备识别
         self.stop_motion_timer()
@@ -3379,8 +3667,30 @@ class StateMachineNode(Node):
             self.transition_to_state(State.ERROR)
     
     def start_qr_detection(self):
-        """开始在qr_a点进行二维码识别，如果20s没有结果则前进重试"""
-        print("[状态机] 到达二维码A点，开始二维码识别")
+        """开始在qr_a点进行二维码识别，如果启用预设则直接使用预设值"""
+        print("[状态机] 到达二维码A点")
+        
+        # 检查是否使用预设值
+        if self.preset_configs['use_preset'] and self.preset_configs['qr_a_value']:
+            print(f"[状态机] 使用预设A点二维码值: {self.preset_configs['qr_a_value']}")
+            self.qr_result = self.preset_configs['qr_a_value']
+            self.initial_qr_result = self.preset_configs['qr_a_value']
+            # 锁定配置，防止运行时修改
+            self.config_locked = True
+            
+            # 开始持续发布二维码信息给语音模块
+            self.start_qr_info_publishing(self.preset_configs['qr_a_value'])
+            
+            # 设置等待语音播报完成标志
+            self.waiting_for_voice = True
+            self.voice_start_time = time.time()
+            
+            # 启动语音播报超时定时器（30秒，给语音播报足够时间） - 使用状态绑定定时器
+            self.voice_complete_timer = self.create_state_timer('voice_timeout', 30.0, self._voice_timeout_callback, State.IN_QR_A)
+            return
+        
+        # 原有的识别逻辑
+        print("[状态机] 开始二维码识别")
         self.qr_detection_start_time = time.time()
         self.z1_steps = 0  # 重置前进步数计数器
         self.qr_retry_count = 0  # 重置重试计数器
@@ -3854,7 +4164,22 @@ class StateMachineNode(Node):
         # 停止运动定时器
         self.stop_motion_timer()
         
+        # 停止二维码信息发布
+        self.stop_qr_info_publishing()
+        
+        # 停止R1倒计时信息发布
+        self.stop_r1_countdown_publishing()
+        
+        # 停止S2绿色箭头信息发布  
+        self.stop_s2_arrow_publishing()
+        
+        # 重置配置锁定状态
+        self.config_locked = False
+        
         print("[状态机] 已重置，可以重新开始")
+        if self.preset_configs['use_preset']:
+            print("[状态机] 预设模式仍然启用")
+            self.print_preset_config()
     
     def check_timeouts(self):
         """检查超时"""

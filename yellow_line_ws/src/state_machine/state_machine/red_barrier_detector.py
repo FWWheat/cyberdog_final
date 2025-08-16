@@ -30,7 +30,6 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-
 import cv2
 import numpy as np
 from cv_bridge import CvBridge
@@ -100,10 +99,11 @@ class RedBarrierDetector(Node):
         
         # 配置QoS
         qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )
+
         
         # 订阅RGB图像
         self.image_subscription = self.create_subscription(

@@ -60,11 +60,10 @@ class GreenArrowDetector(Node):
         
         # 配置QoS
         qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )
-        
         # 订阅RGB图像
         self.image_subscription = self.create_subscription(
             Image,

@@ -94,7 +94,7 @@ class YellowMarkerDetector(Node):
         
         # 配置QoS
         qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )

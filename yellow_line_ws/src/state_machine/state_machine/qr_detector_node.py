@@ -34,8 +34,9 @@ class QRDetectorNode(Node):
         # BEST_EFFORT: 调试图像不需要100%可靠传递，如果偶尔丢失一帧也没关系
         # KEEP_LAST: 只保留最新的10帧调试图像
         # depth=10: 可以缓冲10帧图像
+         # 配置QoS
         qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )

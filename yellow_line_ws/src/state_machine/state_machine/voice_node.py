@@ -20,7 +20,7 @@ class VoiceRelayNode(Node):
         # 订阅二维码识别结果
         self.qr_subscription = self.create_subscription(
             String,
-            '/qr_detector/qr_info',
+            '/voice_node/qr_info',
             self.qr_callback,
             10
         )
