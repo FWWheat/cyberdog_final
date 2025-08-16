@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ros2 run state_machine qr_detector_node
+# ros2 run state_machine qr_detector_node --ros-args -p image_topic:=/mi_desktop_48_b0_2d_7b_03_d0/image
 
 import rclpy
 from rclpy.node import Node
@@ -63,8 +65,18 @@ class QRDetectorNode(Node):
         # 添加状态记忆
         self.last_detected_qr = None
         self.detection_confidence = 0
-        self.min_confidence = 2  # 需要连续检测3次才确认
-        self.publish_interval = 0.1  # 每0.5秒发布一次
+        self.min_confidence = 1  # 需要连续检测2次才确认，降低要求
+        self.publish_interval = 0.05  # 每0.05秒发布一次，提高响应速度
+        
+        # 调试统计变量
+        self.frame_count = 0                      # 总帧数
+        self.detection_count = 0                  # 检测到的帧数
+        self.publish_count = 0                    # 发布的帧数
+        self.last_detection_time = None           # 最后检测时间
+        self.state_change_time = None             # 状态改变时间
+        self.ocr_attempt_count = 0                # OCR尝试次数
+        self.qr_decode_count = 0                  # QR解码成功次数
+        self.confidence_history = []              # 置信度历史
         
         # 创建定时器，持续发布检测到的二维码
         self.publish_timer = self.create_timer(
@@ -83,32 +95,81 @@ class QRDetectorNode(Node):
     def publish_timer_callback(self):
         """定时器回调，持续发布检测到的二维码信息"""
         if self.last_detected_qr is not None:
+            self.publish_count += 1
             self.publish_qr_info(self.last_detected_qr)
+            
+            # 每100次发布记录一次
+            if self.publish_count % 100 == 0:
+                self.get_logger().info(f'持续发布QR码: "{self.last_detected_qr}" (第{self.publish_count}次发布)')
         
     def image_callback(self, msg):
         try:
-            # self.get_logger().info(f'收到图像消息: 宽度={msg.width}, 高度={msg.height}, 编码={msg.encoding}')
+            # 更新帧计数
+            self.frame_count += 1
+            current_time = self.get_clock().now().nanoseconds / 1e9
             
             # 将ROS图像消息转换为OpenCV格式
             cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-            # self.get_logger().info(f'图像转换成功: OpenCV图像形状={cv_image.shape}')
             
             # 检测二维码
             qr_codes = self.detect_qr_codes(cv_image)
-            # self.get_logger().info(f'二维码检测完成: 检测到 {len(qr_codes)} 个二维码')
+            
+            # 更新统计信息
+            if qr_codes:
+                self.detection_count += 1
+                self.last_detection_time = current_time
+                
+                # 记录检测方法
+                for qr_code in qr_codes:
+                    if hasattr(qr_code, 'data'):
+                        try:
+                            qr_data = qr_code.data.decode('utf-8')
+                            if any(code in qr_data for code in ['A-1', 'A-2', 'B-1', 'B-2']):
+                                self.qr_decode_count += 1
+                                self.get_logger().info(
+                                    f'QR码解码成功 - 内容:"{qr_data}", 帧#{self.frame_count}'
+                                )
+                        except:
+                            pass
             
             # 更新状态记忆
+            old_qr = self.last_detected_qr
+            old_confidence = self.detection_confidence
             self.update_detection_state(qr_codes)
+            
+            # 检查状态变化
+            if old_qr != self.last_detected_qr or old_confidence != self.detection_confidence:
+                self.state_change_time = current_time
+                if self.last_detected_qr != old_qr:
+                    self.get_logger().info(f'🔄 QR码状态变更: "{old_qr}" -> "{self.last_detected_qr}" (帧#{self.frame_count})')
+            
+            # 记录置信度历史
+            self.confidence_history.append(self.detection_confidence)
+            if len(self.confidence_history) > 20:
+                self.confidence_history.pop(0)
             
             # 处理检测到的二维码
             for qr_code in qr_codes:
                 self.process_qr_code(qr_code, cv_image, msg.header)
             
+            # 每50帧输出统计信息
+            if self.frame_count % 50 == 0:
+                detection_rate = (self.detection_count / self.frame_count) * 100
+                publish_rate = (self.publish_count / self.frame_count) * 100 if self.publish_count > 0 else 0
+                avg_confidence = sum(self.confidence_history) / len(self.confidence_history) if self.confidence_history else 0
+                
+                self.get_logger().info(
+                    f'📊 统计信息 - 总帧数:{self.frame_count}, 检测率:{detection_rate:.1f}%, '
+                    f'发布率:{publish_rate:.1f}%, QR解码:{self.qr_decode_count}, OCR尝试:{self.ocr_attempt_count}, '
+                    f'当前QR:"{self.last_detected_qr}", 置信度:{self.detection_confidence}/{self.min_confidence}, '
+                    f'平均置信度:{avg_confidence:.1f}'
+                )
+            
             # 发布调试图像（无论是否检测到二维码都发布）
             self.publish_debug_image(cv_image, qr_codes, msg.header)
             
         except Exception as e:
-            self.get_logger().error(f'处理图像时出错: {str(e)}')
+            self.get_logger().error(f'处理图像时出错 (帧#{self.frame_count}): {str(e)}', throttle_duration_sec=1.0)
             import traceback
             self.get_logger().error(f'详细错误信息: {traceback.format_exc()}')
     
@@ -168,6 +229,7 @@ class QRDetectorNode(Node):
             return qr_codes
         
         # 方法2: 使用OCR检测文字
+        self.ocr_attempt_count += 1
         ocr_results = self.detect_text_with_ocr(image)
         
         # 检查OCR结果是否为None
@@ -205,14 +267,20 @@ class QRDetectorNode(Node):
     
     def preprocess_for_large_text(self, image):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
-        # 多种预处理方法
-        methods = {}
         
-        # 方法1: 简单灰度
+        methods = {}
         methods['gray'] = gray
         
-
+        # 添加更多预处理方法提高识别率
+        # 二值化
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        methods['binary'] = binary
+        
+        # 形态学操作去噪
+        kernel = np.ones((2,2), np.uint8)
+        cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+        methods['cleaned'] = cleaned
+        
         return methods
     
     def detect_code_in_text(self, text):
@@ -253,42 +321,80 @@ class QRDetectorNode(Node):
 
     def detect_text_with_ocr(self, image):
         """使用OCR检测文字"""
-        # 先划定感兴趣区域(ROI) - 取图像顶部30%，中间25%部分
         h, w = image.shape[:2]
         
-        # 垂直方向：取顶部30%
-        roi_y1 = int(h * 0.1)
-        roi_y2 = int(h * 0.25)
-        
-        # 水平方向：取中间25%（左右各37.5%边距）
-        roi_margin_w = int(w * 0.4)  # 水平边距37.5%
-        roi_x1 = roi_margin_w
-        roi_x2 = w - roi_margin_w
-        
-        # 提取ROI区域
-        roi_image = image[roi_y1:roi_y2, roi_x1:roi_x2]
-        
-        # 获取所有预处理版本
-        processed_images = self.preprocess_for_large_text(roi_image)
-        
-        # OCR配置
-        configs = [
-            '--oem 3 --psm 6',# 单个文本块
+        # 改进的ROI设置 - 扩大搜索范围，覆盖更多可能的文字位置
+        roi_configs = [
+            # 原始配置（稍作调整）
+            {
+                'y1': int(h * 0.05),  # 从更上方开始
+                'y2': int(h * 0.30),  # 扩大到30%
+                'x1': int(w * 0.35),  # 减少左边距
+                'x2': int(w * 0.65),  # 减少右边距
+                'name': 'extended_roi'
+            },
+            # 专门针对文字位置的ROI
+            {
+                'y1': int(h * 0.08),
+                'y2': int(h * 0.25),
+                'x1': int(w * 0.40),
+                'x2': int(w * 0.60),
+                'name': 'focused_roi'
+            },
+            # 更大范围的ROI
+            {
+                'y1': int(h * 0.0),
+                'y2': int(h * 0.35),
+                'x1': int(w * 0.30),
+                'x2': int(w * 0.70),
+                'name': 'large_roi'
+            },
+
+            {
+            'y1': int(h * 0.35),  # 从高度 35% 开始
+            'y2': int(h * 0.65),  # 到高度 65%
+            'x1': int(w * 0.35),  # 左边裁掉 35%
+            'x2': int(w * 0.65),  # 右边裁掉 35%
+            'name': 'center_roi'
+        }
         ]
         
-        # 测试所有组合
-        for process_name, processed_img in processed_images.items():
-            for config in configs:
-                try:
-                    # 使用image_to_string获取完整文本
-                    text = pytesseract.image_to_string(processed_img, config=config).strip()
-                    print(text)
-                    detected_code = self.detect_code_in_text(text)
-                    if detected_code:
-                        return detected_code
+        # OCR配置 - 添加更多配置选项
+        configs = [
+            '--oem 3 --psm 6',  # 单个文本块
+            '--oem 3 --psm 7',  # 单行文本
+            '--oem 3 --psm 8',  # 单个单词
+            '--oem 3 --psm 13', # 原始行，不做假设
+        ]
+        
+        # 尝试所有ROI配置
+        for roi_config in roi_configs:
+            # 提取ROI区域
+            roi_image = image[roi_config['y1']:roi_config['y2'], 
+                             roi_config['x1']:roi_config['x2']]
+            
+            if roi_image.size == 0:
+                continue
+                
+            # 获取所有预处理版本
+            processed_images = self.preprocess_for_large_text(roi_image)
+            
+            # 测试所有组合
+            for process_name, processed_img in processed_images.items():
+                for config in configs:
+                    try:
+                        text = pytesseract.image_to_string(processed_img, config=config).strip()
+                        self.get_logger().info(f"ROI: {roi_config['name']}, 预处理: {process_name}, 配置: {config}")
+                        self.get_logger().info(f"识别文本: '{text}'")
+                        
+                        detected_code = self.detect_code_in_text(text)
+                        if detected_code:
+                            self.get_logger().info(f"检测到代码: {detected_code}")
+                            return detected_code
 
-                except Exception:
-                    continue
+                    except Exception as e:
+                        self.get_logger().warn(f"OCR错误: {e}")
+                        continue
         
         return None
 
@@ -385,6 +491,28 @@ class QRDetectorNode(Node):
                 # 显示检测到的二维码数量
                 cv2.putText(debug_image, f"Detected {len(qr_codes)} QR Code(s)", 
                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            # 显示统计信息
+            stats_text = f"Frame#{self.frame_count} | QR:\"{self.last_detected_qr}\" Conf:{self.detection_confidence}/{self.min_confidence}"
+            if self.detection_count > 0:
+                detection_rate = (self.detection_count / self.frame_count) * 100
+                stats_text += f" | Det:{self.detection_count}/{self.frame_count}({detection_rate:.1f}%)"
+            if self.publish_count > 0:
+                stats_text += f" | Pub:{self.publish_count}"
+            if self.ocr_attempt_count > 0:
+                stats_text += f" | OCR:{self.ocr_attempt_count}"
+            cv2.putText(debug_image, stats_text, (10, 60), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # 显示发布状态
+            if self.last_detected_qr is not None:
+                publish_text = f"CONTINUOUSLY Publishing: \"{self.last_detected_qr}\""
+                color = (0, 255, 0)  # 绿色
+                cv2.putText(debug_image, publish_text, (10, len(debug_image) - 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+            else:
+                cv2.putText(debug_image, "No QR Code in Memory", (10, len(debug_image) - 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (128, 128, 128), 2)
             
             # 发布调试图像
             # self.get_logger().info('准备发布调试图像...')

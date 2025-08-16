@@ -173,24 +173,30 @@ class YellowLineDetector:
                 # 计算图像中心和阈值
                 image_center = roi_width / 2
                 threshold = roi_width * position_threshold  # 使用可配置的位置阈值
+                print(f"[调试-YCY] 图像中心: {image_center}, 位置阈值: {threshold} (={position_threshold}*{roi_width})")
                 
                 if len(centroids) >= 2:
                     # 两个或更多质心：找到最左和最右的质心
                     left_centroid = min(centroids)
                     right_centroid = max(centroids)
                     lines_center = (left_centroid + right_centroid) / 2
+                    offset = abs(safe_float(image_center) - safe_float(lines_center))
                     
                     print(f"[黄线检测-YCY] 左质心: {left_centroid}, 右质心: {right_centroid}, 黄线中心: {lines_center}")
+                    print(f"[调试-YCY] 图像中心与黄线中心偏移: {offset:.1f}, 阈值: {threshold:.1f}")
                     
                     # 判断机器人位置
                     if safe_compare(image_center, lines_center - threshold, '<'):
                         print(f"[黄线检测-YCY] 位置判断: LEFT (偏移: {safe_float(lines_center) - safe_float(image_center):.1f})")
+                        print(f"[调试-YCY] 决策依据: {image_center} < {lines_center - threshold}")
                         return 'left'
                     elif safe_compare(image_center, lines_center + threshold, '>'):
                         print(f"[黄线检测-YCY] 位置判断: RIGHT (偏移: {safe_float(image_center) - safe_float(lines_center):.1f})")
+                        print(f"[调试-YCY] 决策依据: {image_center} > {lines_center + threshold}")
                         return 'right'
                     else:
                         print(f"[黄线检测-YCY] 位置判断: CENTER (偏移: {abs(safe_float(image_center) - safe_float(lines_center)):.1f})")
+                        print(f"[调试-YCY] 决策依据: {lines_center - threshold} <= {image_center} <= {lines_center + threshold}")
                         return 'center'
                         
                 elif len(centroids) == 1:

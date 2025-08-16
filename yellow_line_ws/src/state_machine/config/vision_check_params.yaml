@@ -1,0 +1,299 @@
+# 视觉检查参数配置文件
+# 修改此文件后重启节点即可生效，无需重新编译
+
+# ROI参数池 - 定义不同的感兴趣区域
+roi_params:
+  # 标准YCY检查区域（两条黄线中间位置检测）
+  standard_ycy:
+    top_ratio: 0.6
+    bottom_ratio: 1.0
+    left_ratio: 0.0
+    right_ratio: 1.0
+  
+  # 精确YCY检查区域（更小的检测区域，用于精确定位）
+  precise_ycy:
+    top_ratio: 0.65
+    bottom_ratio: 0.95
+    left_ratio: 0.1
+    right_ratio: 0.9
+  
+  # 标准DY检查区域（距离黄线位置检测）
+  standard_dy:
+    top_ratio: 0.6
+    bottom_ratio: 1.0
+    left_ratio: 0.0
+    right_ratio: 1.0
+  
+  # 窄DY检查区域（用于精确距离检测）
+  narrow_dy:
+    top_ratio: 0.7
+    bottom_ratio: 1.0
+    left_ratio: 0.2
+    right_ratio: 0.8
+  
+  # 宽DY检查区域（用于远距离检测）
+  wide_dy:
+    top_ratio: 0.5
+    bottom_ratio: 1.0
+    left_ratio: 0.0
+    right_ratio: 1.0
+
+# 阈值参数池
+threshold_params:
+  # 标准YCY阈值（两条黄线中间检测）
+  standard_ycy:
+    position_threshold: 0.08
+    area_threshold: 800
+  
+  # 严格YCY阈值（更高精度要求）
+  strict_ycy:
+    position_threshold: 0.05
+    area_threshold: 1000
+  
+  # 宽松YCY阈值（低精度要求）
+  loose_ycy:
+    position_threshold: 0.12
+    area_threshold: 600
+  
+  # 标准DY阈值（距离黄线检测）
+  standard_dy:
+    distance_threshold: 0.81
+    area_threshold: 300
+  
+  # 严格DY阈值（精确距离检测）
+  strict_dy:
+    distance_threshold: 0.15
+    area_threshold: 400
+  
+  # 宽松DY阈值（远距离检测）
+  loose_dy:
+    distance_threshold: 1.0
+    area_threshold: 200
+
+# 检查点参数配置 - 为每个检查点指定使用哪个ROI和阈值参数
+check_point_configs:
+  # 开始阶段检查
+  start_to_qra_fisheye_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  start_to_qra_rgb_ycy:
+    roi_params: "standard_ycy" 
+    threshold_params: "standard_ycy"
+  
+  # QRA到A1/A2阶段检查
+  qra_to_a1_right_fisheye_ycy:
+    roi_params: "precise_ycy"
+    threshold_params: "strict_ycy"
+  
+  qra_to_a1_right_fisheye_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  qra_to_a1_rgb_dy:
+    roi_params: "narrow_dy"
+    threshold_params: "strict_dy"
+  
+  qra_to_a2_left_fisheye_ycy:
+    roi_params: "precise_ycy"
+    threshold_params: "strict_ycy"
+  
+  qra_to_a2_left_fisheye_dy:
+    roi_params: "standard_dy"
+    threshold_params: "strict_dy"
+  
+  qra_to_a2_rgb_dy:
+    roi_params: "narrow_dy"
+    threshold_params: "strict_dy"
+  
+  # A1/A2到S1阶段检查
+  a1_to_s1_left_fisheye_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  a1_to_s1_right_fisheye_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  a1_to_s1_rgb_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  a1_to_s1_right_fisheye_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  a2_to_s1_right_fisheye_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  a2_to_s1_left_fisheye_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  a2_to_s1_rgb_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  a2_to_s1_right_fisheye_ycy_final:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  # L1/R1到QRB阶段检查
+  l1_to_qrb_rgb_dy:
+    roi_params: "wide_dy"
+    threshold_params: "loose_dy"
+  
+  l1_to_qrb_right_fisheye_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  r1_to_qrb_rgb_dy:
+    roi_params: "wide_dy"
+    threshold_params: "loose_dy"
+  
+  r1_to_qrb_left_fisheye_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  # QRB到B1/B2阶段检查
+  qrb_to_b1_rgb_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  qrb_to_b1_rgb_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  qrb_to_b2_rgb_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  qrb_to_b2_rgb_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  # B1/B2互转检查
+  b1_to_b2_rgb_dy_1:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  b1_to_b2_right_fisheye_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  b1_to_b2_rgb_dy_2:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  b2_to_b1_rgb_dy_1:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  b2_to_b1_left_fisheye_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  b2_to_b1_rgb_dy_2:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  # 返程检查（L1/R1到S2）
+  l1_to_s2_rgb_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  l1_to_s2_rgb_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  r1_to_s2_rgb_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  r1_to_s2_rgb_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  # S1到A1/A2返程检查
+  s1_to_a1_rgb_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  s1_to_a1_right_fisheye_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  s1_to_a1_right_fisheye_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  s1_to_a1_rgb_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  s1_to_a2_rgb_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  s1_to_a2_left_fisheye_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  s1_to_a2_left_fisheye_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  s1_to_a2_rgb_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  # 回到起始点检查
+  a1_to_start_left_fisheye_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  a1_to_start_right_fisheye_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  a1_to_start_right_fisheye_ycy_1:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  a1_to_start_right_fisheye_ycy_2:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  a1_to_start_rgb_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  a2_to_start_right_fisheye_ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  a2_to_start_left_fisheye_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+  
+  a2_to_start_right_fisheye_ycy_1:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  a2_to_start_right_fisheye_ycy_2:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  
+  a2_to_start_rgb_dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"
+
+# 默认参数配置（当找不到特定配置时使用）
+default_configs:
+  ycy:
+    roi_params: "standard_ycy"
+    threshold_params: "standard_ycy"
+  dy:
+    roi_params: "standard_dy"
+    threshold_params: "standard_dy"

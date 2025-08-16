@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
-from re import I
 import cv2
 import numpy as np
+import sys
+import os
 
 def draw_roi(image_path, output_path=None):
     """
@@ -20,13 +21,10 @@ def draw_roi(image_path, output_path=None):
     
     # 计算ROI区域
     # 垂直方向：取顶部30%
-    roi_y1 = int(h * 0.1)
-    roi_y2 = int(h * 0.25)
-    
-    # 水平方向：取中间25%（左右各37.5%边距）
-    roi_margin_w = int(w * 0.4)  # 水平边距37.5%
-    roi_x1 = roi_margin_w
-    roi_x2 = w - roi_margin_w
+    roi_y1 = int(h * 0.15)
+    roi_y2 = int(h * 0.75)
+    roi_x1 = int(w * 0.25) 
+    roi_x2 = int(w * 0.75) 
     
     print(f"ROI区域: x({roi_x1}-{roi_x2}), y({roi_y1}-{roi_y2})")
     print(f"ROI尺寸: {roi_x2-roi_x1} x {roi_y2-roi_y1}")
@@ -69,18 +67,52 @@ def draw_roi(image_path, output_path=None):
     return result_image
 
 if __name__ == "__main__":
-    # 测试图像
-    test_images = ["1.png", "2.png", "3.png", "4.png", "5.png", "6.png"]
+    if len(sys.argv) < 2:
+        print("用法: python test_roi.py <image_path> [output_path]")
+        print("或者: python test_roi.py <image1> <image2> ... (多个图像)")
+        sys.exit(1)
     
-    for img_name in test_images:
-        try:
-            print(f"\n处理图像: {img_name}")
-            output_name = f"test_results/roi_{img_name}"
-            input_name = f"img3/{img_name}"
-            print(input_name)
-            draw_roi(input_name, output_name)
-        except Exception as e:
-            print(f"处理 {img_name} 时出错: {e}")
-            continue
+    # 如果只有一个图像参数
+    if len(sys.argv) == 2:
+        image_path = sys.argv[1]
+        if not os.path.exists(image_path):
+            print(f"图像文件不存在: {image_path}")
+            sys.exit(1)
+        
+        print(f"处理图像: {image_path}")
+        draw_roi(image_path)
     
-    print("\n所有图像处理完成！")
+    # 如果有输出路径参数
+    elif len(sys.argv) == 3:
+        image_path = sys.argv[1]
+        output_path = sys.argv[2]
+        
+        if not os.path.exists(image_path):
+            print(f"图像文件不存在: {image_path}")
+            sys.exit(1)
+        
+        print(f"处理图像: {image_path}")
+        draw_roi(image_path, output_path)
+    
+    # 如果有多个图像参数
+    else:
+        for image_path in sys.argv[1:]:
+            if not os.path.exists(image_path):
+                print(f"跳过不存在的文件: {image_path}")
+                continue
+            
+            print(f"\n处理图像: {image_path}")
+            # 生成输出文件名
+            base_name = os.path.splitext(os.path.basename(image_path))[0]
+            output_path = f"test_results/roi_{base_name}.png"
+            
+            # 确保输出目录存在
+            os.makedirs("test_results", exist_ok=True)
+            
+            try:
+                draw_roi(image_path, output_path)
+            except Exception as e:
+                print(f"处理 {image_path} 时出错: {e}")
+                continue
+        
+        print("\n所有图像处理完成！")

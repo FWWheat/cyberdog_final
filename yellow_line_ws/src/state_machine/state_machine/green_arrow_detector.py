@@ -44,7 +44,15 @@ class GreenArrowDetector(Node):
         
         # 检测参数
         self.min_contour_area = 1000  # 最小轮廓面积
-        self.roi_ratio = 0.6  # ROI区域比例（中间60%区域）
+        
+        # 调试统计变量
+        self.frame_count = 0                      # 总帧数
+        self.detection_count = 0                  # 检测到的帧数
+        self.left_arrow_count = 0                 # 左箭头检测次数
+        self.right_arrow_count = 0                # 右箭头检测次数
+        self.last_detection_time = None           # 最后检测时间
+        self.consecutive_same_direction = 0       # 连续相同方向计数
+        self.direction_history = []               # 方向历史记录
         
         # 调试模式
         self.debug_mode = self.declare_parameter('debug_mode', True).value
@@ -60,7 +68,7 @@ class GreenArrowDetector(Node):
         # 订阅RGB图像
         self.image_subscription = self.create_subscription(
             Image,
-            '/image_rgb',
+            '/mi_desktop_48_b0_2d_7b_03_d0/image',
             self.image_callback,
             qos_profile
         )
@@ -80,35 +88,82 @@ class GreenArrowDetector(Node):
                 qos_profile
             )
         
-        self.get_logger().info('绿色箭头识别节点已启动')
+        self.get_logger().info('绿色箭头识别节点已启动 (增强调试版)')
         self.get_logger().info(f'参数配置: debug_mode={self.debug_mode}')
-        self.get_logger().info('订阅话题: /image_rgb')
         self.get_logger().info('发布话题: /green_arrow_detector/direction')
         if self.debug_mode:
             self.get_logger().info('发布调试话题: /green_arrow_detector/debug_image')
         self.get_logger().info('HSV绿色范围: {} - {}'.format(self.lower_green, self.upper_green))
+        self.get_logger().info('调试功能: 帧计数, 方向统计, 连续检测, 历史记录')
     
     def image_callback(self, msg):
         """图像回调函数"""
         try:
+            # 更新帧计数
+            self.frame_count += 1
+            current_time = self.get_clock().now().nanoseconds / 1e9
+            
             # 转换图像
             cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
             
             # 检测箭头方向
             direction = self.detect_arrow_direction(cv_image)
             
-            # 发布方向信息（避免重复发布）
-            if direction and direction != self.last_direction:
-                self.publish_direction(direction)
-                self.last_direction = direction
-                self.get_logger().info(f'检测到绿色箭头方向: {direction}')
+            # 更新统计信息
+            if direction:
+                self.detection_count += 1
+                self.last_detection_time = current_time
+                
+                # 统计方向
+                if direction == "left":
+                    self.left_arrow_count += 1
+                elif direction == "right":
+                    self.right_arrow_count += 1
+                
+                # 检查连续相同方向
+                if self.direction_history and self.direction_history[-1] == direction:
+                    self.consecutive_same_direction += 1
+                else:
+                    self.consecutive_same_direction = 1
+                
+                # 更新方向历史
+                self.direction_history.append(direction)
+                if len(self.direction_history) > 20:
+                    self.direction_history.pop(0)
+                
+                self.get_logger().info(
+                    f'检测到绿色箭头方向: {direction} - 帧#{self.frame_count}, '
+                    f'连续相同方向:{self.consecutive_same_direction}次'
+                )
+            
+            # 发布方向信息
+            if direction:
+                # 避免重复发布相同方向（可选择启用）
+                if direction != self.last_direction:
+                    self.publish_direction(direction)
+                    if self.last_direction is not None:
+                        self.get_logger().info(f'🔄 箭头方向变更: {self.last_direction} -> {direction}')
+                    self.last_direction = direction
+                elif self.consecutive_same_direction == 1:  # 仅在首次检测时发布
+                    self.publish_direction(direction)
+            
+            # 每100帧输出统计信息
+            if self.frame_count % 100 == 0:
+                detection_rate = (self.detection_count / self.frame_count) * 100
+                direction_summary = "".join(self.direction_history[-10:]) if self.direction_history else "无"
+                
+                self.get_logger().info(
+                    f'📊 统计信息 - 总帧数:{self.frame_count}, 检测率:{detection_rate:.1f}%, '
+                    f'左箭头:{self.left_arrow_count}, 右箭头:{self.right_arrow_count}, '
+                    f'当前方向:"{self.last_direction}", 近期历史:{direction_summary}'
+                )
             
             # 发布调试图像
             if self.debug_mode:
-                self.publish_debug_image(cv_image, direction, msg.header)
+                self.publish_debug_image_enhanced(cv_image, direction, msg.header)
                 
         except Exception as e:
-            self.get_logger().error(f'处理图像时出错: {str(e)}')
+            self.get_logger().error(f'处理图像时出错 (帧#{self.frame_count}): {str(e)}', throttle_duration_sec=1.0)
     
     def detect_arrow_direction(self, image: np.ndarray) -> Optional[str]:
         """
@@ -123,9 +178,14 @@ class GreenArrowDetector(Node):
         try:
             height, width = image.shape[:2]
             
-            # 提取ROI区域（中间部分）
-            roi_margin = int(width * (1 - self.roi_ratio) / 2)
-            roi_image = image[:, roi_margin:width-roi_margin]
+            # 提取ROI区域
+            roi = {
+                'y1': int(height * 0),  # 从高度 35% 开始
+                'y2': int(height * 1),  # 到高度 65%
+                'x1': int(width * 0),   # 左边裁掉 35%
+                'x2': int(width * 1),   # 右边裁掉 35%
+            }
+            roi_image = image[roi['y1']:roi['y2'], roi['x1']:roi['x2']]
             roi_width = roi_image.shape[1]
             
             # 转换为HSV色彩空间
@@ -142,7 +202,7 @@ class GreenArrowDetector(Node):
             # 查找轮廓
             contours_result = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if len(contours_result) == 3:
-                contours, hierarchy, _ = contours_result
+                _, contours, hierarchy = contours_result
             else:
                 contours, hierarchy = contours_result
             
@@ -250,8 +310,8 @@ class GreenArrowDetector(Node):
         msg.data = direction
         self.direction_publisher.publish(msg)
     
-    def publish_debug_image(self, image: np.ndarray, direction: Optional[str], header):
-        """发布调试图像"""
+    def publish_debug_image_enhanced(self, image: np.ndarray, direction: Optional[str], header):
+        """发布增强的调试图像（带统计信息）"""
         if not self.debug_mode:
             return
         
@@ -260,13 +320,18 @@ class GreenArrowDetector(Node):
             height, width = image.shape[:2]
             
             # 绘制ROI区域
-            roi_margin = int(width * (1 - self.roi_ratio) / 2)
-            cv2.rectangle(debug_image, (roi_margin, 0), (width-roi_margin, height), (255, 255, 0), 2)
-            cv2.putText(debug_image, "ROI", (roi_margin + 10, 30), 
+            roi = {
+                'y1': int(height * 0),  # 从高度 0% 开始
+                'y2': int(height * 1),  # 到高度 100%
+                'x1': int(width * 0),   # 左边 0%
+                'x2': int(width * 1),   # 右边 100%
+            }
+            cv2.rectangle(debug_image, (roi['x1'], roi['y1']), (roi['x2'], roi['y2']), (255, 255, 0), 2)
+            cv2.putText(debug_image, "ROI (Full Frame)", (roi['x1'] + 10, roi['y1'] + 30), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
             
             # 在ROI区域检测绿色
-            roi_image = image[:, roi_margin:width-roi_margin]
+            roi_image = image[roi['y1']:roi['y2'], roi['x1']:roi['x2']]
             hsv = cv2.cvtColor(roi_image, cv2.COLOR_BGR2HSV)
             mask = cv2.inRange(hsv, self.lower_green, self.upper_green)
             
@@ -277,13 +342,13 @@ class GreenArrowDetector(Node):
             
             # 在原图上绘制绿色区域
             green_overlay = debug_image.copy()
-            green_overlay[:, roi_margin:width-roi_margin][mask > 0] = [0, 255, 0]
+            green_overlay[roi['y1']:roi['y2'], roi['x1']:roi['x2']][mask > 0] = [0, 255, 0]
             debug_image = cv2.addWeighted(debug_image, 0.7, green_overlay, 0.3, 0)
             
             # 查找并绘制轮廓
             contours_result = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if len(contours_result) == 3:
-                contours, hierarchy, _ = contours_result
+                _, contours, hierarchy  = contours_result
             else:
                 contours, hierarchy = contours_result
             
@@ -293,13 +358,18 @@ class GreenArrowDetector(Node):
                 if c is not None and len(c) > 0 and c.dtype in [np.int32, np.float32]:
                     valid_contours.append(c)
             contours = valid_contours
+            
+            largest_contour = None
+            contour_info = ""
+            
             if contours:
                 # 找到最大轮廓
                 largest_contour = max(contours, key=cv2.contourArea)
                 if cv2.contourArea(largest_contour) >= self.min_contour_area:
                     # 调整轮廓坐标到原图
                     adjusted_contour = largest_contour.copy()
-                    adjusted_contour[:, :, 0] += roi_margin
+                    adjusted_contour[:, :, 0] += roi['x1']
+                    adjusted_contour[:, :, 1] += roi['y1']
                     
                     # 绘制轮廓
                     cv2.drawContours(debug_image, [adjusted_contour], -1, (0, 255, 255), 3)
@@ -307,25 +377,68 @@ class GreenArrowDetector(Node):
                     # 绘制质心
                     M = cv2.moments(largest_contour)
                     if M["m00"] != 0:
-                        cx = int(M["m10"] / M["m00"]) + roi_margin
-                        cy = int(M["m01"] / M["m00"])
+                        cx = int(M["m10"] / M["m00"]) + roi['x1']
+                        cy = int(M["m01"] / M["m00"]) + roi['y1']
                         cv2.circle(debug_image, (cx, cy), 8, (0, 0, 255), -1)
+                        
+                        # 分析轮廓特征
+                        x, y, w, h = cv2.boundingRect(largest_contour)
+                        area = cv2.contourArea(largest_contour)
+                        contour_info = f"Area:{area:.0f}, Size:{w}x{h}, Center:({cx},{cy})"
             
             # 显示检测结果
             if direction:
                 direction_text = f"Arrow: {direction.upper()}"
                 color = (0, 255, 0)
+                
+                # 绘制箭头指向
+                center_x, center_y = width // 2, height // 2
+                if direction == "left":
+                    cv2.arrowedLine(debug_image, (center_x + 50, center_y), (center_x - 50, center_y), (0, 255, 0), 8, tipLength=0.3)
+                elif direction == "right":
+                    cv2.arrowedLine(debug_image, (center_x - 50, center_y), (center_x + 50, center_y), (0, 255, 0), 8, tipLength=0.3)
             else:
                 direction_text = "No Arrow Detected"
                 color = (0, 0, 255)
             
-            cv2.putText(debug_image, direction_text, (10, height - 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+            cv2.putText(debug_image, direction_text, (10, height - 120), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
+            
+            # 显示统计信息
+            stats_text = f"Frame#{self.frame_count} | Dir:\"{self.last_direction}\" Cons:{self.consecutive_same_direction}"
+            if self.detection_count > 0:
+                detection_rate = (self.detection_count / self.frame_count) * 100
+                stats_text += f" | Det:{self.detection_count}/{self.frame_count}({detection_rate:.1f}%)"
+            stats_text += f" | L:{self.left_arrow_count} R:{self.right_arrow_count}"
+            cv2.putText(debug_image, stats_text, (10, 60), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # 显示轮廓信息
+            if contour_info:
+                cv2.putText(debug_image, contour_info, (10, 90), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # 显示方向历史
+            if self.direction_history:
+                history_text = "History: " + "".join([d[0].upper() for d in self.direction_history[-10:]])
+                cv2.putText(debug_image, history_text, (10, height - 90), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             
             # 显示参数信息
             param_text = f"HSV: {self.lower_green}-{self.upper_green}, Min Area: {self.min_contour_area}"
             cv2.putText(debug_image, param_text, (10, height - 60), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # 显示发布状态
+            if direction:
+                if direction != self.last_direction or self.consecutive_same_direction == 1:
+                    publish_status = "PUBLISHING: Direction Change or First Detection"
+                    status_color = (0, 255, 0)
+                else:
+                    publish_status = "NOT PUBLISHING: Same Direction (Filtered)"
+                    status_color = (0, 255, 255)
+                cv2.putText(debug_image, publish_status, (10, height - 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
             
             # 发布调试图像
             debug_msg = self.bridge.cv2_to_imgmsg(debug_image, "bgr8")
@@ -333,7 +446,7 @@ class GreenArrowDetector(Node):
             self.debug_image_publisher.publish(debug_msg)
             
         except Exception as e:
-            self.get_logger().error(f'发布调试图像时出错: {str(e)}')
+            self.get_logger().error(f'发布增强调试图像时出错: {str(e)}')
 
 
 def main(args=None):

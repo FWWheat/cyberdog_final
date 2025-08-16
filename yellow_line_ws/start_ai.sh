@@ -23,24 +23,17 @@ echo "=========================================="
 echo "AI相机启动脚本"
 echo "=========================================="
 
-# 设置ROS2环境
-echo "[1/2] 设置ROS2环境..."
-source /opt/ros2/galactic/setup.bash
-echo "✓ ROS2环境已设置"
 
-# 启动AI相机
-echo "[2/2] 启动AI相机..."
-echo "启动camera_server节点..."
+source /opt/ros2/galactic/setup.bash
+
 ros2 run camera_test camera_server &
 CAMERA_SERVER_PID=$!
-echo "✓ camera_server已启动 (PID: $CAMERA_SERVER_PID)"
 
 # 等待一下让camera_server完全启动
 sleep 3
 
-echo "配置AI相机服务..."
 ros2 service call /mi_desktop_48_b0_2d_7b_03_d0/camera_service protocol/srv/CameraService "{command: 9, width: 640, height: 480, fps: 0}"
-echo "✓ AI相机配置完成"
+
 
 
 # 等待用户中断
