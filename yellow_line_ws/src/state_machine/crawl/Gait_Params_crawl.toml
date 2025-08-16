@@ -1,0 +1,482 @@
+# Gait Params for crawl (匍匐前进)
+
+# 1 - 准备阶段，四腿支撑
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]  # 降低机身高度到-0.18m
+landing_pos_des = [0.0, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]  # 较低的抬腿高度
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 300
+
+# 2 - FR摆动，向前迈步
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.13, 0.0, 0.0]  # 缓慢前进
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.09, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0]
+step_height     = [0.04, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 3 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.09, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+# 4 - RL摆动，向前迈步
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.13, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.09, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0,  0.07, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.04]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 5 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.09, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0,  0.07, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+# 6 - FL摆动，向前迈步
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.13, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.09, 0.0, 0.0,  0.09, 0.0, 0.0,  0.0, 0.0, 0.0,  0.07, 0.0, 0.0]
+step_height     = [0.02, 0.04, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 7 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.09, 0.0, 0.0,  0.09, 0.0, 0.0,  0.0, 0.0, 0.0,  0.07, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+# 8 - RR摆动，向前迈步
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.13, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.09, 0.0, 0.0,  0.09, 0.0, 0.0,  0.07, 0.0, 0.0,  0.07, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.04, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 9 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.09, 0.0, 0.0,  0.09, 0.0, 0.0,  0.07, 0.0, 0.0,  0.07, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+
+
+
+
+
+# 继续第二轮循环
+# 10 - FR摆动，继续向前
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.1650, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.15, 0.0, 0.0,  0.09, 0.0, 0.0,  0.07, 0.0, 0.0,  0.07, 0.0, 0.0]
+step_height     = [0.04, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 11 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.15, 0.0, 0.0,  0.09, 0.0, 0.0,  0.07, 0.0, 0.0,  0.07, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+# 12 - RL摆动，继续向前
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.1650, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.15, 0.0, 0.0,  0.09, 0.0, 0.0,  0.07, 0.0, 0.0,  0.120, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.04]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 13 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.15, 0.0, 0.0,  0.09, 0.0, 0.0,  0.07, 0.0, 0.0,  0.120, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+# 14 - FL摆动，继续向前
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.1650, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.15, 0.0, 0.0,  0.15, 0.0, 0.0,  0.07, 0.0, 0.0,  0.120, 0.0, 0.0]
+step_height     = [0.02, 0.04, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 15 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.15, 0.0, 0.0,  0.15, 0.0, 0.0,  0.07, 0.0, 0.0,  0.120, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+# 16 - RR摆动，完成循环
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.1650, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.15, 0.0, 0.0,  0.15, 0.0, 0.0,  0.090, 0.0, 0.0,  0.120, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.04, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+
+# 17 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.15, 0.0, 0.0,  0.15, 0.0, 0.0,  0.090, 0.0, 0.0,  0.120, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+
+
+
+# 继续第三轮循环
+# 18 - FR摆动，继续向前
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.330, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.200, 0.0, 0.0,  0.15, 0.0, 0.0,  0.090, 0.0, 0.0,  0.120, 0.0, 0.0]
+step_height     = [0.04, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 19 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.200, 0.0, 0.0,  0.15, 0.0, 0.0,  0.090, 0.0, 0.0,  0.120, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+#20
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.330, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.200, 0.0, 0.0,  0.15, 0.0, 0.0,  0.090, 0.0, 0.0,  0.155, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.04]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 21 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.200, 0.0, 0.0,  0.15, 0.0, 0.0,  0.090, 0.0, 0.0,  0.155, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+#22
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.330, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.200, 0.0, 0.0,  0.200, 0.0, 0.0,  0.090, 0.0, 0.0,  0.155, 0.0, 0.0]
+step_height     = [0.02, 0.04, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 23- 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.200, 0.0, 0.0,  0.200, 0.0, 0.0,  0.090, 0.0, 0.0,  0.155, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+#24
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.330, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.200, 0.0, 0.0,  0.200, 0.0, 0.0,  0.105, 0.0, 0.0,  0.155, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.04, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 25 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.200, 0.0, 0.0,  0.200, 0.0, 0.0,  0.105, 0.0, 0.0,  0.155, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+
+
+
+# 第四轮循环
+# 18 - FR摆动，继续向前
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.330, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.230, 0.0, 0.0,  0.200, 0.0, 0.0,  0.105, 0.0, 0.0,  0.155, 0.0, 0.0]
+step_height     = [0.04, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 19 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.230, 0.0, 0.0,  0.200, 0.0, 0.0,  0.105, 0.0, 0.0,  0.155, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+#20
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.330, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.230, 0.0, 0.0,  0.200, 0.0, 0.0,  0.105, 0.0, 0.0,  0.1650, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.04]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 21 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.230, 0.0, 0.0,  0.200, 0.0, 0.0,  0.1050, 0.0, 0.0,  0.1650, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+#22
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.330, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.230, 0.0, 0.0,  0.220, 0.0, 0.0,  0.1050, 0.0, 0.0,  0.1650, 0.0, 0.0]
+step_height     = [0.02, 0.04, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 23- 稳定阶段  
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.230, 0.0, 0.0,  0.220, 0.0, 0.0,  0.1050, 0.0, 0.0,  0.1650, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+#24
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.330, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.230, 0.0, 0.0,  0.220, 0.0, 0.0,  0.1150, 0.0, 0.0,  0.1650, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.04, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 240
+
+# 25 - 稳定阶段
+[[step]]
+type            = "usergait"
+body_vel_des    = [0.0, 0.0, 0.0]
+body_pos_des    = [0.0, 0.0, 0.0, 0.0, 0.0, -0.18]
+landing_pos_des = [0.230, 0.0, 0.0,  0.220, 0.0, 0.0,  0.1150, 0.0, 0.0,  0.1650, 0.0, 0.0]
+step_height     = [0.02, 0.02, 0.02, 0.02]
+weight          = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
+use_mpc_traj    = 1
+mu              = 0.85
+landing_gain    = 1
+gait_id         = 110
+duration        = 150
+
+
+
+# End of extended crawl - 延长版匍匐前进 # 

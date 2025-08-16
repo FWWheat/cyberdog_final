@@ -1,0 +1,163 @@
+# Gait Def for crawl (匍匐前进)
+
+# 第一轮循环
+# 1 - FR摆动，其他三腿支撑
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 10
+
+[[section]]
+contact  = [0, 1, 1, 1]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 2 - RL摆动，其他三腿支撑
+[[section]]
+contact  = [1, 1, 1, 0]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 3 - FL摆动，其他三腿支撑
+[[section]]
+contact  = [1, 0, 1, 1]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 4 - RR摆动，其他三腿支撑
+[[section]]
+contact  = [1, 1, 0, 1]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 第二轮循环
+# 5 - FR摆动，其他三腿支撑
+
+
+[[section]]
+contact  = [0, 1, 1, 1]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 6 - RL摆动，其他三腿支撑
+[[section]]
+contact  = [1, 1, 1, 0]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 7 - FL摆动，其他三腿支撑
+[[section]]
+contact  = [1, 0, 1, 1]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 8 - RR摆动，其他三腿支撑
+[[section]]
+contact  = [1, 1, 0, 1]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 第三轮循环 - 延长匍匐前进
+# 9 - FR摆动，其他三腿支撑
+
+
+[[section]]
+contact  = [0, 1, 1, 1]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 10 - RL摆动，其他三腿支撑
+[[section]]
+contact  = [1, 1, 1, 0]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 11 - FL摆动，其他三腿支撑
+[[section]]
+contact  = [1, 0, 1, 1]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 12 - RR摆动，其他三腿支撑
+[[section]]
+contact  = [1, 1, 0, 1]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+
+# 第四轮循环 - 延长匍匐前进
+# 13 - FR摆动，其他三腿支撑
+
+
+[[section]]
+contact  = [0, 1, 1, 1]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 14 - RL摆动，其他三腿支撑
+[[section]]
+contact  = [1, 1, 1, 0]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 15 - FL摆动，其他三腿支撑
+[[section]]
+contact  = [1, 0, 1, 1]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+# 16 - RR摆动，其他三腿支撑
+[[section]]
+contact  = [1, 1, 0, 1]
+duration = 8
+
+[[section]]
+contact  = [1, 1, 1, 1]
+duration = 5
+
+
+# End of extended crawl gait definition - 延长版匍匐前进步态定义 # 

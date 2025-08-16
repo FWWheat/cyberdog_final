@@ -120,6 +120,8 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 # 导入黄线检测器 - 使用包名导入
 from state_machine.yellow_line_detector import YellowLineDetector
+# 导入TOF消息类型
+from protocol.msg import HeadTofPayload, RearTofPayload, SingleTofPayload
 
 class State(Enum):
     """状态机状态枚举 - 根据状态机超详细说明.md"""
@@ -507,6 +509,17 @@ class StateMachineNode(Node):
         self.lie_down_final_timer = None
         self.position_check_restart_timer = None
         
+        # TOF数据相关
+        self.tof_data = {
+            'left_head': None,
+            'right_head': None,
+            'left_rear': None,
+            'right_rear': None
+        }
+        self.tof_data_available = False
+        self.waiting_for_tof = False
+        self.tof_threshold = 0.1  # 0.1米阈值
+        
         # 定时器管理 - 状态绑定的定时器字典
         self.state_timers = {}  # {state: {timer_name: timer_object}}
         self.global_timers = {}  # {timer_name: timer_object} 全局定时器
@@ -640,44 +653,33 @@ class StateMachineNode(Node):
         if hasattr(self, 'r1_countdown_to_publish'):
             self.r1_countdown_to_publish = None
     
-    def start_s2_arrow_publishing(self):
-        """开始持续发布S2绿色箭头识别状态信息给语音模块"""
-        self.s2_arrow_to_publish = "S2_ARROW_DETECTING"
-        print(f"[状态机] 开始持续发布S2绿色箭头识别状态信息: {self.s2_arrow_to_publish}")
+    def start_green_arrow_direction_publishing(self, direction):
+        """开始持续发布绿色箭头方向信息"""
+        self.green_arrow_direction_to_publish = direction
+        print(f"[状态机] 开始持续发布绿色箭头方向信息: {direction}")
         
         # 停止之前的定时器（如果存在）
-        if hasattr(self, 's2_arrow_timer') and self.s2_arrow_timer is not None:
-            self.s2_arrow_timer.cancel()
+        if self.green_arrow_direction_timer is not None:
+            self.green_arrow_direction_timer.cancel()
         
         # 创建10Hz定时器持续发布
-        self.s2_arrow_timer = self.create_timer(0.1, self.publish_s2_arrow)
+        self.green_arrow_direction_timer = self.create_timer(0.1, self.publish_green_arrow_direction)
     
-    def publish_s2_arrow(self):
-        """发布S2绿色箭头识别状态信息到语音模块"""
-        if hasattr(self, 's2_arrow_to_publish') and self.s2_arrow_to_publish is not None:
-            # 根据当前识别状态发送不同信息
-            if self.green_arrow_result is not None:
-                # 已识别到结果
-                msg_data = f"S2_ARROW_DETECTED:{self.green_arrow_result}"
-            else:
-                # 仍在识别中
-                msg_data = self.s2_arrow_to_publish
-            
-            trigger_msg = String()
-            trigger_msg.data = msg_data
-            # 使用已有的voice_trigger_publisher发布
-            if hasattr(self, 'voice_trigger_publisher'):
-                self.voice_trigger_publisher.publish(trigger_msg)
-                # print(f"[状态机] 发布S2绿色箭头状态信息: {msg_data}")
+    def publish_green_arrow_direction(self):
+        """发布绿色箭头方向信息"""
+        if self.green_arrow_direction_to_publish is not None:
+            msg = String()
+            msg.data = self.green_arrow_direction_to_publish
+            self.green_arrow_direction_publisher.publish(msg)
+            # print(f"[状态机] 发布绿色箭头方向: {self.green_arrow_direction_to_publish}")
     
-    def stop_s2_arrow_publishing(self):
-        """停止发布S2绿色箭头识别状态信息"""
-        if hasattr(self, 's2_arrow_timer') and self.s2_arrow_timer is not None:
-            self.s2_arrow_timer.cancel()
-            self.s2_arrow_timer = None
-            print("[状态机] 停止发布S2绿色箭头识别状态信息")
-        if hasattr(self, 's2_arrow_to_publish'):
-            self.s2_arrow_to_publish = None
+    def stop_green_arrow_direction_publishing(self):
+        """停止发布绿色箭头方向信息"""
+        if self.green_arrow_direction_timer is not None:
+            self.green_arrow_direction_timer.cancel()
+            self.green_arrow_direction_timer = None
+            print("[状态机] 停止发布绿色箭头方向信息")
+        self.green_arrow_direction_to_publish = None
     
     def get_check_params(self, config_name, detection_type):
         """
@@ -1392,7 +1394,7 @@ class StateMachineNode(Node):
             10
         )
         
-        # 鱼眼相机图像订阅者 (1500x800 RG10)
+        # 鱼眼相机图像订阅者 (1650x800 RG10)
         self.fisheye_image_subscription = self.create_subscription(
             Image,
             '/image_right',
@@ -1469,9 +1471,26 @@ class StateMachineNode(Node):
             10
         )
         
+        # 绿色箭头方向发布者 - 用于发布绿色箭头方向信息
+        self.green_arrow_direction_publisher = self.create_publisher(
+            String,
+            '/state_machine/green_arrow_direction',
+            10
+        )
+        
         # 语音播报状态管理
         self.qr_info_timer = None  # 持续发布二维码信息的定时器
         self.qr_info_to_publish = None  # 待发布的二维码信息
+        self.green_arrow_direction_timer = None  # 持续发布绿色箭头方向信息的定时器
+        self.green_arrow_direction_to_publish = None  # 待发布的绿色箭头方向信息
+        
+        # TOF数据订阅者（仅头部TOF）
+        self.head_tof_subscription = self.create_subscription(
+            HeadTofPayload,
+            '/mi_desktop_48_b0_2d_7b_03_d0/head_tof_payload',
+            self.head_tof_callback,
+            10
+        )
         
         # 启动相机健康监控定时器
         self.camera_health_timer = self.create_timer(10.0, self.camera_health_monitor)
@@ -1888,13 +1907,57 @@ class StateMachineNode(Node):
         # 语音定时器会通过状态转换自动清理，不需要手动取消
         self.voice_complete_timer = None
         
-        # 停止发布S2绿色箭头识别状态信息
-        self.stop_s2_arrow_publishing()
+        # 停止发布绿色箭头方向信息
+        self.stop_green_arrow_direction_publishing()
         
         # 关闭绿色箭头识别节点
         if 'green_arrow_detector' in self.managed_nodes:
             print("[状态机] 关闭绿色箭头识别节点")
             self.stop_node('green_arrow_detector')
+    
+    def head_tof_callback(self, msg):
+        """头部TOF数据回调"""
+        try:
+            # 只在特定状态下处理TOF数据
+            if self.current_state not in [State.IN_A1, State.IN_A2, State.IN_B1, State.IN_B2]:
+                return
+            
+            # 更新左头TOF数据
+            if msg.left_head.data_available and len(msg.left_head.data) > 0:
+                # 取最小值作为距离（最近的障碍物）
+                min_distance = min(msg.left_head.data)
+                self.tof_data['left_head'] = min_distance
+            
+            # 更新右头TOF数据
+            if msg.right_head.data_available and len(msg.right_head.data) > 0:
+                # 取最小值作为距离（最近的障碍物）
+                min_distance = min(msg.right_head.data)
+                self.tof_data['right_head'] = min_distance
+            
+            # 如果正在等待TOF数据
+            if self.waiting_for_tof:
+                self.check_tof_threshold()
+                
+        except Exception as e:
+            self.get_logger().error(f'处理头部TOF数据时出错: {str(e)}')
+    
+    def check_tof_threshold(self):
+        """检查TOF数据是否达到阈值"""
+        left_head = self.tof_data.get('left_head')
+        right_head = self.tof_data.get('right_head')
+        
+        # 检查左头或右头任一传感器数据小于阈值
+        if ((left_head is not None and left_head < self.tof_threshold) or 
+            (right_head is not None and right_head < self.tof_threshold)):
+            
+            print(f"[状态机] TOF数据达到阈值: 左头={left_head:.3f}m, 右头={right_head:.3f}m, 阈值={self.tof_threshold}m")
+            print("[状态机] 检测到障碍物接近，进入下一阶段")
+            
+            # 停止等待TOF数据
+            self.waiting_for_tof = False
+            
+            # 进入下一阶段
+            self.proceed_to_next_stage()
     
     def left_fisheye_callback(self, msg):
         """左鱼眼相机图像回调"""
@@ -1916,10 +1979,13 @@ class StateMachineNode(Node):
             # 检查是否已经处理过绿色箭头识别结果
             if self.current_state == State.IN_S2 and self.green_arrow_result is None:
                 self.green_arrow_result = direction
-                print(f"[状态机] 绿色箭头识别完成: {direction}，等待语音播报完成信号")
+                print(f"[状态机] 绿色箭头识别完成: {direction}，开始持续发布方向信息")
                 
                 # 重置绿色箭头识别开始时间，防止超时检查重复触发
                 self.green_arrow_detection_start_time = None
+                
+                # 开始持续发布绿色箭头方向信息
+                self.start_green_arrow_direction_publishing(direction)
                 
                 # 设置等待语音播报标志（对于绿色箭头识别）
                 self.waiting_for_voice = True
@@ -2666,6 +2732,18 @@ class StateMachineNode(Node):
         """进入下一阶段"""
         # 重置修正次数
         self.position_correction_attempts = 0
+        
+        # 如果在TOF等待状态，特殊处理
+        if self.waiting_for_tof and self.current_state in [State.IN_A1, State.IN_A2, State.IN_B1, State.IN_B2]:
+            print("[状态机] TOF条件满足，完成运动序列")
+            self.waiting_for_tof = False
+            # 取消TOF超时定时器
+            self.cancel_state_timer('tof_wait_timeout', self.current_state)
+            # 完成当前运动序列
+            self.movement_step = len(self.movement_sequence)  # 设置为序列长度，表示完成
+            self.on_movement_sequence_completed()
+            return
+        
         # 继续执行运动序列的下一个动作
         self.movement_step += 1
         self.execute_next_movement()
@@ -3039,22 +3117,23 @@ class StateMachineNode(Node):
         self.create_state_timer('s1_to_s2_complete', 5.0, goto_s2, State.S1_TO_S2)
     
     def start_in_s2_sequence(self):
-        """in_s2状态：10Hz定时发送绿色箭头识别状态信息，如果启用预设则直接使用预设值"""
+        """in_s2状态：如果启用预设则直接使用预设值，否则等待绿色箭头方向识别"""
         print("[状态机] 在S2点")
         
         # 检查是否使用预设值
         if self.preset_configs['use_preset'] and self.preset_configs['arrow_value']:
             print(f"[状态机] 使用预设绿色箭头值: {self.preset_configs['arrow_value']}")
             self.green_arrow_result = self.preset_configs['arrow_value']
+            
+            # 开始持续发布绿色箭头方向信息
+            self.start_green_arrow_direction_publishing(self.preset_configs['arrow_value'])
+            
             # 直接处理结果，不启动识别
             self._process_green_arrow_result(self.preset_configs['arrow_value'])
             return
         
-        # 原有的识别逻辑 + 10Hz定时发送
-        print("[状态机] 开始10Hz定时发送绿色箭头识别状态信息，等待绿色箭头方向识别")
-        
-        # 开始10Hz定时发布绿色箭头识别状态信息
-        self.start_s2_arrow_publishing()
+        # 原有的识别逻辑
+        print("[状态机] 等待绿色箭头方向识别")
         
         # 记录绿色箭头识别开始时间
         self.green_arrow_detection_start_time = time.time()
@@ -3098,27 +3177,17 @@ class StateMachineNode(Node):
             self.l1_next_state = State.L1_TO_QRB
             print(f"[状态机] 前一状态为{self.previous_state.name}，使用默认下一状态L1_TO_QRB")
         
-        # 预留特殊步态实现位置
-        # TODO: 实现特殊步态
-        
-        # 暂时用普通前进代替特殊步态
+     
         self.movement_sequence = [
-            ('lie_down', None),                                # 趴下
-        
+            ('forward', {'count': 9}),  
+            ('execute_crawl_gait', None),  # 执行匍匐步态
         ]
         self.movement_step = 0
         self.execute_next_movement()
     
     def start_in_r1_sequence(self):
-        """in_r1状态：10Hz定时发布倒计时触发信号给voice_node，等待voice_node的完成信号，根据前一状态决定下一状态"""
-        print(f"[状态机] 在R1点，开始10Hz定时发布倒计时触发信号 (前一状态: {self.previous_state.name})")
-        
-        # 开始10Hz定时发布倒计时触发信号
-        self.start_r1_countdown_publishing()
-        
-        # 设置等待voice_node完成信号的状态
-        self.waiting_for_voice = True
-        self.voice_start_time = time.time()
+        """in_r1状态：先前进12步，然后10Hz定时发布倒计时触发信号给voice_node，等待voice_node的完成信号"""
+        print(f"[状态机] 在R1点，先前进12步，然后开始语音播报 (前一状态: {self.previous_state.name})")
         
         # 根据前一状态决定下一状态
         if self.previous_state == State.S2_TO_R1:
@@ -3132,14 +3201,12 @@ class StateMachineNode(Node):
             self.r1_next_state = State.R1_TO_QRB
             print(f"[状态机] 前一状态为{self.previous_state.name}，使用默认下一状态R1_TO_QRB")
         
-        # 启动超时定时器（10秒）以防voice_node无响应
-        def r1_voice_timeout():
-            if self.waiting_for_voice:
-                print("[状态机] R1状态等待voice_node超时，强制转到下一状态")
-                self.waiting_for_voice = False
-                self._handle_r1_voice_complete()
-        
-        self.create_state_timer('r1_voice_timeout', 10.0, r1_voice_timeout, State.IN_R1)
+        # 设置运动序列：先前进12步，然后开始语音播报
+        self.movement_sequence = [
+            ('forward', {'count': 12, 'vel_des': [0.2, 0.0, 0.0]})  # 前进12步，速度0.2
+        ]
+        self.movement_step = 0
+        self.execute_next_movement()  # 立即开始执行前进12步
     
     def _handle_r1_voice_complete(self):
         """处理R1状态语音播报完成"""
@@ -3153,23 +3220,10 @@ class StateMachineNode(Node):
             print("[状态机] 关闭黄色标志物识别节点")
             self.stop_node('yellow_marker_detector')
         
-        # 在转到下一状态前，先执行12步前进，速度为0.2
-        print("[状态机] R1状态播报完成后，向前走12步，速度0.2")
+        # 直接转到下一状态（12步前进已经在语音播报前完成）
         next_state = getattr(self, 'r1_next_state', State.R1_TO_QRB)
-        
-        # 执行12步前进运动，使用自定义参数设置速度和步数
-        self._execute_motion_command('forward', {
-            'count': 12,
-            'vel_des': [0.2, 0.0, 0.0]
-        })
-        
-        # 设置一个定时器，在运动完成后转到下一状态
-        def r1_forward_complete():
-            print(f"[状态机] R1状态前进12步完成，转到下一状态: {next_state.name}")
-            self.transition_to_state(next_state)
-        
-        # 创建定时器，等待前进运动完成（12步 * 0.2秒/步 = 2.4秒 + 缓冲时间）
-        self.create_state_timer('r1_forward_complete', 3.0, r1_forward_complete, State.IN_R1)
+        print(f"[状态机] R1状态语音播报完成，转到下一状态: {next_state.name}")
+        self.transition_to_state(next_state)
     
     def _handle_l1_sequence_complete(self):
         """处理L1状态序列完成"""
@@ -3208,11 +3262,11 @@ class StateMachineNode(Node):
         self.transition_to_state(next_state)
     
     def start_l1_to_qrb_sequence(self):
-        """l1_to_qrb状态：前进(150-x1)步，检查RGB距离，右转，检查右鱼眼距离"""
+        """l1_to_qrb状态：前进(165-x1)步，检查RGB距离，右转，检查右鱼眼距离"""
         print("[状态机] 开始l1_to_qrb运动序列")
-        forward_steps = max(150 - self.x1_steps, 0)
+        forward_steps = max(165 - self.x1_steps, 0)
         self.movement_sequence = [
-            ('forward', {'count': forward_steps}),             # 前进(150-x1)步
+            ('forward', {'count': forward_steps}),             # 前进(165-x1)步
             # ('check_rgb_distance', None),                      # 检查RGB距离
             ('right', {'count': 21}),                          # 右转21步  
             # ('check_right_fisheye_distance', None),                      # 检查右鱼眼距离
@@ -3221,11 +3275,11 @@ class StateMachineNode(Node):
         self.execute_next_movement()
     
     def start_r1_to_qrb_sequence(self):
-        """r1_to_qrb状态：前进(150-y1)步，检查RGB距离，左转，检查左鱼眼距离"""
+        """r1_to_qrb状态：前进(165-y1)步，检查RGB距离，左转，检查左鱼眼距离"""
         print("[状态机] 开始r1_to_qrb运动序列")
-        forward_steps = max(150 - self.y1_steps, 0)
+        forward_steps = max(165 - self.y1_steps, 0)
         self.movement_sequence = [
-            ('forward', {'count': forward_steps}),             # 前进(150-y1)步
+            ('forward', {'count': forward_steps}),             # 前进(165-y1)步
             # ('check_rgb_distance', None),                      # 检查RGB距离
             ('left', {'count': 21}),                           # 左转21步
             # ('check_left_fisheye_distance', None),                      # 检查左鱼眼距离
@@ -3360,11 +3414,11 @@ class StateMachineNode(Node):
         self.execute_next_movement()
     
     def start_l1_to_s2_sequence(self):
-        """l1_to_s2状态：前150-x2,检查-rgb-dy,右21,检查-rgb-ycy"""
+        """l1_to_s2状态：前165-x2,检查-rgb-dy,右21,检查-rgb-ycy"""
         print("[状态机] 开始l1_to_s2运动序列（返程）")
-        forward_steps = max(150 - self.x2_steps, 0)
+        forward_steps = max(165 - self.x2_steps, 0)
         self.movement_sequence = [
-            ('forward', {'count': forward_steps}),             # 前进(150-x2)步
+            ('forward', {'count': forward_steps}),             # 前进(165-x2)步
             # ('check_rgb_distance', None),                      # 检查RGB距离
             ('right', {'count': 21}),                          # 右转21步
             # ('check_rgb_position', None),                      # 检查RGB位置
@@ -3373,11 +3427,11 @@ class StateMachineNode(Node):
         self.execute_next_movement()
     
     def start_r1_to_s2_sequence(self):
-        """r1_to_s2状态：前150-y2,检查-rgb-dy,左21,检查-rgb-ycy"""
+        """r1_to_s2状态：前165-y2,检查-rgb-dy,左21,检查-rgb-ycy"""
         print("[状态机] 开始r1_to_s2运动序列（返程）")
-        forward_steps = max(150 - self.y2_steps, 0)
+        forward_steps = max(165 - self.y2_steps, 0)
         self.movement_sequence = [
-            ('forward', {'count': forward_steps}),             # 前进(150-y2)步
+            ('forward', {'count': forward_steps}),             # 前进(165-y2)步
             # ('check_rgb_distance', None),                      # 检查RGB距离
             ('left', {'count': 21}),                           # 左转21步
             # ('check_rgb_position', None),                      # 检查RGB位置
@@ -3643,6 +3697,23 @@ class StateMachineNode(Node):
         elif self.current_state == State.IN_L1:
             print("[状态机] in_l1运动序列完成，处理状态转换")
             self._handle_l1_sequence_complete()
+        elif self.current_state == State.IN_R1:
+            print("[状态机] in_r1前进12步完成，开始语音播报")
+            # 前进12步完成后，开始10Hz定时发布倒计时触发信号
+            self.start_r1_countdown_publishing()
+            
+            # 设置等待voice_node完成信号的状态
+            self.waiting_for_voice = True
+            self.voice_start_time = time.time()
+            
+            # 启动超时定时器（10秒）以防voice_node无响应
+            def r1_voice_timeout():
+                if self.waiting_for_voice:
+                    print("[状态机] R1状态等待voice_node超时，强制转到下一状态")
+                    self.waiting_for_voice = False
+                    self._handle_r1_voice_complete()
+            
+            self.create_state_timer('r1_voice_timeout', 10.0, r1_voice_timeout, State.IN_R1)
         elif self.current_state == State.L1_TO_S2:
             print("[状态机] l1_to_s2运动序列完成，进入in_s2_r状态")
             self.transition_to_state(State.IN_S2_R)
@@ -3841,6 +3912,10 @@ class StateMachineNode(Node):
                 print("[状态机] 开始前进直到检测到黄色标志物")
                 self.forward_until_yellow_marker()
                 return
+            elif movement_type == 'execute_crawl_gait':
+                print("[状态机] 开始执行匍匐步态")
+                self.execute_crawl_gait()
+                return
             
             # 检查是否是lie_down动作，如果是则先等待5秒
             if movement_type == 'lie_down':
@@ -4023,7 +4098,25 @@ class StateMachineNode(Node):
         # 定时器会通过状态绑定自动清理
         self.lie_down_final_timer = None
         
-        print("[状态机] lie_down等待10秒完成，继续执行")
+        print("[状态机] lie_down等待10秒完成")
+        
+        # 检查是否在需要TOF检查的状态
+        if self.current_state in [State.IN_A1, State.IN_A2, State.IN_B1, State.IN_B2]:
+            print("[状态机] 在语音交互状态，开始等待TOF数据小于0.1m")
+            self.waiting_for_tof = True
+            
+            # 创建60秒超时定时器，防止TOF数据异常导致卡死
+            def tof_timeout():
+                if self.waiting_for_tof:
+                    print("[状态机] 等待TOF数据超时，强制进入下一阶段")
+                    self.waiting_for_tof = False
+                    self.proceed_to_next_stage()
+            
+            self.create_state_timer('tof_wait_timeout', 60.0, tof_timeout, self.current_state)
+            return  # 等待TOF数据，不继续执行
+        
+        # 其他状态继续原有逻辑
+        print("[状态机] 继续执行")
         # 检查是否是运动序列中的最后一个动作
         if hasattr(self, 'movement_step') and hasattr(self, 'movement_sequence'):
             if self.movement_step + 1 >= len(self.movement_sequence):
@@ -4170,11 +4263,20 @@ class StateMachineNode(Node):
         # 停止R1倒计时信息发布
         self.stop_r1_countdown_publishing()
         
-        # 停止S2绿色箭头信息发布  
-        self.stop_s2_arrow_publishing()
+        # 停止绿色箭头方向信息发布  
+        self.stop_green_arrow_direction_publishing()
         
         # 重置配置锁定状态
         self.config_locked = False
+        
+        # 重置TOF相关变量
+        self.waiting_for_tof = False
+        self.tof_data = {
+            'left_head': None,
+            'right_head': None,
+            'left_rear': None,
+            'right_rear': None
+        }
         
         print("[状态机] 已重置，可以重新开始")
         if self.preset_configs['use_preset']:
@@ -4222,6 +4324,9 @@ class StateMachineNode(Node):
             
             # 重置绿色箭头识别开始时间，防止重复触发
             self.green_arrow_detection_start_time = None
+            
+            # 开始持续发布绿色箭头方向信息（超时默认值）
+            self.start_green_arrow_direction_publishing(self.green_arrow_default_value)
             
             # 停止绿色箭头识别节点
             if 'green_arrow_detector' in self.managed_nodes:

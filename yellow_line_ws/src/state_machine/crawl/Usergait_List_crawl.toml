@@ -1,0 +1,50 @@
+# 匍匐前进步态列表
+# 流程：恢复正常姿态 -> 匍匐前进 -> 恢复正常状态
+
+# 第一步：恢复正常姿态
+[[step]]
+mode = 12  # Position interpolation control
+gait_id = 0
+contact = 0
+life_count = 0 #Fake value
+vel_des = [ 0.0, 0.0, 0.0,]
+rpy_des = [ 0.0, 0.0, 0.0,]
+pos_des = [ 0.0, 0.0, 0.0,]
+acc_des = [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,]
+ctrl_point = [ 0.0, 0.0, 0.0,]
+foot_pose = [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,]
+step_height = [ 0.0, 0.0,]
+value = 0
+duration = 5000  # 恢复正常姿态需要5秒
+
+# 第二步：执行匍匐前进步态
+[[step]]
+mode = 62 # User define gait
+gait_id = 110
+contact = 15
+life_count = 0
+vel_des = [ 0.0, 0.0, 0.0,] # velocity of x y yaw
+rpy_des = [ 0.0, 0.0, 0.0,]
+pos_des = [ 0.0, 0.0, 0.0,]
+acc_des = [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,]
+ctrl_point = [ 0.0, 0.0, 0.0,]
+foot_pose = [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,]
+step_height = [ 0.0, 0.0,]
+value = 0
+duration = 18600  # 匍匐前进持续时间（31步 * 600ms平均）
+
+# 第三步：恢复正常状态（纯阻尼模式）
+[[step]]
+mode = 7 #Puredamper
+gait_id = 0
+contact = 0
+life_count = 0
+vel_des = [ 0.0, 0.0, 0.0,]
+rpy_des = [ 0.0, 0.0, 0.0,]
+pos_des = [ 0.0, 0.0, 0.0,]
+acc_des = [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,]
+ctrl_point = [ 0.0, 0.0, 0.0,]
+foot_pose = [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,]
+step_height = [ 0.0, 0.0,]
+value = 0
+duration = 4000  # 恢复正常状态4秒 

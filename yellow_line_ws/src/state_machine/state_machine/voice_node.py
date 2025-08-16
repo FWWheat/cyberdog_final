@@ -28,7 +28,7 @@ class VoiceRelayNode(Node):
         # 订阅绿色箭头方向识别结果
         self.arrow_subscription = self.create_subscription(
             String,
-            '/green_arrow_detector/direction',
+            '/state_machine/green_arrow_direction',
             self.arrow_callback,
             10
         )
